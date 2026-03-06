@@ -1,0 +1,276 @@
+{
+  "version": "1.0.0",
+  "description": "AI模型速度测试框架配置文件",
+  "models": [
+    {
+      "name": "MiniMax-M2.5-HighSpeed",
+      "endpoint": "https://www.minimaxi.com/v1/chat/completions",
+      "api_key": "sk-cp-xxx",
+      "model": "minimax-m2.5-highspeed",
+      "enabled": true
+    },
+    {
+      "name": "MiniMax-Text-01",
+      "endpoint": "https://www.minimaxi.com/v1/chat/completions",
+      "api_key": "sk-cp-xxx",
+      "model": "MiniMax-Text-01",
+      "enabled": false
+    }
+  ],
+  "test_cases": [
+    {
+      "id": "tc_ontology_1",
+      "name": "本体生成 - 小说文本案例",
+      "type": "ontology_generation",
+      "description": "测试模型设计知识图谱本体的能力 - 小说文本",
+      "enabled": true,
+      "prompt": null,
+      "max_tokens": 4096,
+      "temperature": 0.3,
+      "stream": true,
+      "system_prompt": "你是一个专业的知识图谱本体设计专家...",
+      "messages": [
+        {
+          "role": "user",
+          "content": "## 模拟需求\n\n我想知道主角的动机和下一步可能的行为\n\n## 文档内容\n\n# 第九章：离别\n\n*2038年10月·河北*"
+        }
+      ],
+      "metadata": {
+        "expected_output_type": "json",
+        "complexity": "high"
+      }
+    },
+    {
+      "id": "tc_ontology_2",
+      "name": "本体生成 - 政府工作报告案例",
+      "type": "ontology_generation",
+      "description": "测试模型设计政府工作报告相关本体的能力",
+      "enabled": true,
+      "prompt": null,
+      "max_tokens": 4096,
+      "temperature": 0.3,
+      "stream": true,
+      "system_prompt": "你是一个专业的知识图谱本体设计专家...",
+      "messages": [
+        {
+          "role": "user",
+          "content": "## 模拟需求\n\n预测政府2026年会如何推进各个项目\n\n## 文档内容\n\n2026年杭州市政府工作报告..."
+        }
+      ],
+      "metadata": {
+        "expected_output_type": "json",
+        "complexity": "high"
+      }
+    },
+    {
+      "id": "tc_graph_1",
+      "name": "图谱构建 - 玄幻小说案例",
+      "type": "graph_construction",
+      "description": "测试模型从玄幻小说文本提取实体和关系的能力",
+      "enabled": true,
+      "prompt": null,
+      "max_tokens": 2000,
+      "temperature": 0.2,
+      "stream": true,
+      "system_prompt": "你是一个专业的知识图谱构建助手...",
+      "messages": [
+        {
+          "role": "user",
+          "content": "从以下文本中提取实体和关系。\n\n实体类型: Protagonist, FamilyMember..."
+        }
+      ],
+      "metadata": {
+        "expected_output_type": "json",
+        "complexity": "medium"
+      }
+    },
+    {
+      "id": "tc_graph_2",
+      "name": "图谱构建 - 新闻事件案例",
+      "type": "graph_construction",
+      "description": "测试模型从新闻事件提取实体和关系的能力",
+      "enabled": true,
+      "prompt": null,
+      "max_tokens": 2000,
+      "temperature": 0.2,
+      "stream": true,
+      "system_prompt": "你是一个专业的知识图谱构建助手...",
+      "messages": [
+        {
+          "role": "user",
+          "content": "从以下文本中提取实体和关系。\n\n实体类型: Person, Organization..."
+        }
+      ],
+      "metadata": {
+        "expected_output_type": "json",
+        "complexity": "medium"
+      }
+    },
+    {
+      "id": "tc_profile_1",
+      "name": "人设生成 - 学生角色案例",
+      "type": "profile_generation",
+      "description": "测试模型生成学生角色人设的能力",
+      "enabled": true,
+      "prompt": null,
+      "max_tokens": 2000,
+      "temperature": 0.8,
+      "stream": true,
+      "system_prompt": "你是社交媒体用户画像生成专家...",
+      "messages": [
+        {
+          "role": "user",
+          "content": "为实体生成详细的社交媒体用户人设..."
+        }
+      ],
+      "metadata": {
+        "expected_output_type": "json",
+        "complexity": "medium"
+      }
+    },
+    {
+      "id": "tc_profile_2",
+      "name": "人设生成 - 医生角色案例",
+      "type": "profile_generation",
+      "description": "测试模型生成医生角色人设的能力",
+      "enabled": true,
+      "prompt": null,
+      "max_tokens": 2000,
+      "temperature": 0.8,
+      "stream": true,
+      "system_prompt": "你是社交媒体用户画像生成专家...",
+      "messages": [
+        {
+          "role": "user",
+          "content": "为实体生成详细的社交媒体用户人设..."
+        }
+      ],
+      "metadata": {
+        "expected_output_type": "json",
+        "complexity": "medium"
+      }
+    },
+    {
+      "id": "tc_profile_3",
+      "name": "人设生成 - 商贩角色案例",
+      "type": "profile_generation",
+      "description": "测试模型生成商贩角色人设的能力",
+      "enabled": true,
+      "prompt": null,
+      "max_tokens": 2000,
+      "temperature": 0.8,
+      "stream": true,
+      "system_prompt": "你是社交媒体用户画像生成专家...",
+      "messages": [
+        {
+          "role": "user",
+          "content": "为实体生成详细的社交媒体用户人设..."
+        }
+      ],
+      "metadata": {
+        "expected_output_type": "json",
+        "complexity": "medium"
+      }
+    },
+    {
+      "id": "tc_time_config_1",
+      "name": "模拟配置 - 常规事件时间配置",
+      "type": "simulation_config",
+      "description": "测试模型生成常规事件时间配置的能力",
+      "enabled": true,
+      "prompt": null,
+      "max_tokens": 1000,
+      "temperature": 0.3,
+      "stream": true,
+      "system_prompt": "你是社交媒体模拟专家...",
+      "messages": [
+        {
+          "role": "user",
+          "content": "基于以下模拟需求，生成时间模拟配置..."
+        }
+      ],
+      "metadata": {
+        "expected_output_type": "json",
+        "complexity": "low"
+      }
+    },
+    {
+      "id": "tc_time_config_2",
+      "name": "模拟配置 - 突发事件时间配置",
+      "type": "simulation_config",
+      "description": "测试模型生成突发事件时间配置的能力",
+      "enabled": true,
+      "prompt": null,
+      "max_tokens": 1000,
+      "temperature": 0.3,
+      "stream": true,
+      "system_prompt": "你是社交媒体模拟专家...",
+      "messages": [
+        {
+          "role": "user",
+          "content": "基于以下模拟需求，生成时间模拟配置..."
+        }
+      ],
+      "metadata": {
+        "expected_output_type": "json",
+        "complexity": "low"
+      }
+    },
+    {
+      "id": "tc_agent_config",
+      "name": "模拟配置 - Agent活动配置",
+      "type": "simulation_config",
+      "description": "测试模型生成Agent活动配置的能力",
+      "enabled": true,
+      "prompt": null,
+      "max_tokens": 2000,
+      "temperature": 0.3,
+      "stream": true,
+      "system_prompt": "你是社交媒体行为分析专家...",
+      "messages": [
+        {
+          "role": "user",
+          "content": "基于以下信息，为每个实体生成社交媒体活动配置..."
+        }
+      ],
+      "metadata": {
+        "expected_output_type": "json",
+        "complexity": "medium"
+      }
+    }
+  ],
+  "concurrency": {
+    "num_requests": 1,
+    "test_rounds": 10,
+    "interval": 1,
+    "max_concurrent": 3
+  },
+  "output": {
+    "results_dir": "results",
+    "save_detailed_logs": true,
+    "save_io_records": true,
+    "export_csv": true,
+    "export_jsonl": true
+  },
+  "thresholds": {
+    "ttft_max": 10,
+    "min_tokens_per_sec": 10,
+    "max_total_time": 60
+  },
+  "test_suite": {
+    "name": "MiroFish测试套件",
+    "description": "MiroFish项目模型调用提示词案例测试套件",
+    "enabled_test_case_ids": [
+      "tc_ontology_1",
+      "tc_ontology_2",
+      "tc_graph_1",
+      "tc_graph_2",
+      "tc_profile_1",
+      "tc_profile_2",
+      "tc_profile_3",
+      "tc_time_config_1",
+      "tc_time_config_2",
+      "tc_agent_config"
+    ]
+  }
+}

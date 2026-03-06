@@ -1,0 +1,128 @@
+# ============================
+# 环境变量和敏感配置
+# ============================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+credentials/
+
+# ============================
+# Python
+# ============================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+*.db
+*.sqlite
+*.sqlite3
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+*.pyc
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+.conda/
+
+# ============================
+# Node.js / npm
+# ============================
+frontend/node_modules/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+frontend/package-lock.json
+yarn.lock
+frontend/.pnpm-store/
+
+# ============================
+# 前端构建 (Vue/React 等)
+# ============================
+frontend/dist/
+frontend/.vite/
+frontend/cache/
+frontend/coverage/
+frontend/.turbo/
+*.tsbuildinfo
+
+# ============================
+# 测试结果、日志和缓存
+# ============================
+results/
+logs/
+*.jsonl
+*.log
+*.tmp
+*.temp
+.cache/
+.pytest_cache/
+coverage/
+.nyc_output/
+
+# ============================
+# IDE 配置
+# ============================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-*
+
+# ============================
+# 配置文件 (敏感)
+# ============================
+config/config.json
+config/*.json.bak
+config/.env
+*.local.json
+
+# ============================
+# 模型文件 (大文件)
+# ============================
+*.h5
+*.onnx
+*.pkl
+*.pickle
+models/
+weights/
+checkpoints/
+
+# ============================
+# 系统文件
+# ============================
+__MACOSX/
+*.zip
+*.tar.gz
+*.rar
+.DS_Store

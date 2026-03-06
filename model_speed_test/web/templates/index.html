@@ -1,0 +1,2278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Czhmisaka - AI模型速度测试</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary: #FF4500;
+            --primary-dim: rgba(255,69,0,0.15);
+            --black: #0a0a0a;
+            --gray-900: #111;
+            --gray-800: #1a1a1a;
+            --gray-700: #252525;
+            --gray-600: #333;
+            --gray-500: #444;
+            --gray-400: #666;
+            --gray-300: #888;
+            --gray-200: #aaa;
+            --gray-100: #ccc;
+            --white: #fff;
+            --accent-red: #FF6B6B;
+            --accent-yellow: #FECA57;
+            --accent-cyan: #48DBFB;
+            --accent-green: #1DD1A1;
+        }
+        body {
+            font-family: 'Noto Sans SC', sans-serif;
+            background: var(--black);
+            color: var(--gray-100);
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        /* 全屏布局 */
+        .dashboard {
+            display: grid;
+            grid-template-columns: 400px 1fr;
+            grid-template-rows: 60px 1fr 120px;
+            height: 100vh;
+            gap: 12px;
+            padding: 12px;
+            background: 
+                linear-gradient(90deg, rgba(255,69,0,0.03) 1px, transparent 1px),
+                linear-gradient(rgba(255,69,0,0.03) 1px, transparent 1px),
+                var(--black);
+            background-size: 40px 40px;
+        }
+
+        /* 顶部栏 */
+        .header {
+            grid-column: span 2;
+            background: var(--gray-800);
+            border: 1px solid var(--gray-700);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+        }
+
+        /* 全屏按钮 */
+        .fullscreen-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            padding: 0;
+            border: none;
+            background: transparent;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-right: 16px;
+            flex-shrink: 0;
+        }
+        .fullscreen-btn:hover {
+            background: var(--gray-700);
+        }
+        .fullscreen-btn .fullscreen-icon {
+            font-size: 20px;
+            color: var(--gray-400);
+        }
+        .fullscreen-btn:hover .fullscreen-icon {
+            color: var(--white);
+        }
+        .logo {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--white);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .logo::before {
+            content: '';
+            width: 8px;
+            height: 24px;
+            background: var(--primary);
+            border-radius: 2px;
+        }
+        .logo-tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            color: var(--primary);
+            background: var(--primary-dim);
+            padding: 4px 10px;
+            border-radius: 12px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+        }
+        .btn {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 10px 24px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .btn-primary { background: var(--primary); color: var(--white); }
+        .btn-primary:hover { background: #ff5722; transform: translateY(-1px); }
+        .btn-secondary { background: var(--gray-700); color: var(--gray-200); border: 1px solid var(--gray-600); }
+        .btn-secondary:hover { background: var(--gray-600); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+        /* 状态指示 */
+        .status-row { display: flex; gap: 20px; }
+        .status-item { display: flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray-500); }
+        .status-dot.connected { background: var(--primary); box-shadow: 0 0 8px var(--primary); }
+        .status-dot.running { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); animation: pulse 1s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+        .status-label { color: var(--gray-400); }
+        .status-value { color: var(--white); }
+
+        /* 左侧面板 */
+        .panel-left {
+            background: var(--gray-800);
+            border: 1px solid var(--gray-700);
+            border-radius: 12px;
+            padding: 8px;
+            display: flex;
+            flex-direction: row;
+            gap: 8px;
+            overflow: hidden;
+            height: 100%;
+            box-sizing: border-box;
+        }
+        .panel-title {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--white);
+            margin-bottom: 6px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        .panel-title::before { content: '■'; color: var(--primary); margin-right: 8px; }
+        .item-list { flex: 1 1 auto; overflow-y: auto; margin: 0 -4px; padding: 0 4px; min-height: 0; height: 0; }
+        .list-section { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+        .list-header { font-family: 'JetBrains Mono', monospace; font-size: 0.6rem; color: var(--gray-400); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid var(--gray-700); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+        
+        .item { display: flex; align-items: center; padding: 8px 10px; background: var(--gray-700); border-radius: 6px; margin-bottom: 4px; cursor: pointer; transition: all 0.2s; border: 1px solid transparent; }
+        .item:hover { background: var(--gray-600); }
+        .item.selected { border-color: var(--primary); background: var(--primary-dim); }
+        .item-checkbox { width: 14px; height: 14px; border: 2px solid var(--gray-500); border-radius: 3px; margin-right: 8px; display: flex; align-items: center; justify-content: center; color: var(--primary); font-size: 9px; flex-shrink: 0; }
+        .item.selected .item-checkbox { border-color: var(--primary); background: var(--primary); }
+        .item-name { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--white); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .item-delete { width: 18px; height: 18px; border: none; background: transparent; color: var(--gray-500); cursor: pointer; border-radius: 4px; font-size: 12px; flex-shrink: 0; }
+        .item-delete:hover { background: var(--accent-red); color: white; }
+
+        .add-btn { width: 100%; padding: 6px; background: transparent; border: 2px dashed var(--gray-600); border-radius: 6px; color: var(--gray-400); font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; cursor: pointer; transition: all 0.2s; }
+        .add-btn:hover { border-color: var(--primary); color: var(--primary); }
+
+        /* 中间任务卡片区域 */
+        .panel-main {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow: hidden;
+        }
+        .tasks-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 4px;
+        }
+        .tasks-title { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--gray-400); text-transform: uppercase; letter-spacing: 1px; }
+        .tasks-count { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--primary); }
+        
+        .task-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 12px;
+            overflow-y: auto;
+            padding: 4px;
+        }
+        
+        /* 任务卡片 */
+        .task-card {
+            background: var(--gray-800);
+            border: 1px solid var(--gray-700);
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            min-height: 320px;
+            max-height: 400px;
+            transition: all 0.2s;
+        }
+        .task-card:hover { border-color: var(--gray-500); }
+        .task-card.active { border-color: var(--primary); box-shadow: 0 0 12px var(--primary-dim); }
+        
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+        }
+        .task-info { flex: 1; }
+        .task-model { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--primary); margin-bottom: 4px; }
+        .task-case { font-family: 'Space Grotesk', sans-serif; font-size: 0.85rem; color: var(--white); }
+        .task-status { font-family: 'JetBrains Mono', monospace; font-size: 0.6rem; padding: 3px 8px; border-radius: 10px; }
+        .task-status.running { background: var(--accent-green); color: var(--black); }
+        .task-status.done { background: var(--gray-600); color: var(--gray-300); }
+        .task-status.error { background: var(--accent-red); color: var(--white); }
+
+        /* 进度条 */
+        .task-progress { margin-bottom: 12px; }
+        .task-progress-bar { height: 6px; background: var(--gray-700); border-radius: 3px; overflow: hidden; }
+        .task-progress-fill { height: 100%; background: linear-gradient(90deg, var(--primary), #ff6b2c); border-radius: 3px; transition: width 0.3s; }
+        .task-progress-text { font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; color: var(--gray-400); margin-top: 4px; display: flex; justify-content: space-between; }
+
+        /* 卡片内容区 */
+        .task-content { 
+            flex: 1; 
+            display: flex; 
+            flex-direction: column; 
+            overflow: hidden; 
+            min-height: 0; 
+        }
+        .task-io { 
+            display: block;
+            width: 100%;
+            overflow: visible;
+        }
+        .task-io-header { font-family: 'JetBrains Mono', monospace; font-size: 0.6rem; color: var(--gray-500); text-transform: uppercase; margin-bottom: 4px; }
+        .task-io-content { 
+            flex: 1; 
+            background: var(--gray-900); 
+            border-radius: 6px; 
+            padding: 8px; 
+            overflow-y: auto; 
+            font-size: 0.7rem; 
+            line-height: 1.5; 
+            color: var(--gray-300);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .task-io-content.streaming { border: 1px dashed var(--primary); background: rgba(255,69,0,0.05); }
+        .cursor { display: inline-block; width: 2px; height: 1em; background: var(--primary); animation: blink 1s infinite; vertical-align: text-bottom; }
+
+        /* 轮次矩阵 - 使用 Grid 布局实现动态行列 */
+        .round-matrix { 
+            display: grid;
+            width: 100%;
+            gap: 4px;
+            /* 默认7列，每列自适应 */
+            grid-template-columns: repeat(7, 1fr);
+            overflow: visible;
+        }
+        
+        /* 圆环按钮 - 进度环样式 */
+        .round-btn { 
+            aspect-ratio: 1;
+            border-radius: 50%; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+            background: var(--gray-700);
+            color: var(--gray-400);
+            border: 2px solid var(--gray-600);
+            /* 默认字体大小，会被JS覆盖 */
+            font-size: 0.6rem;
+        }
+        
+        /* 圆环进度条 */
+        .round-btn::before {
+            content: '';
+            position: absolute;
+            inset: 2px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            border-top-color: var(--primary);
+        }
+        
+        /* 待测试状态 - 灰色 */
+        .round-btn.pending { 
+            background: var(--gray-800); 
+            color: var(--gray-500);
+            border-color: var(--gray-700);
+        }
+        .round-btn.pending::before {
+            display: none;
+        }
+        .round-btn.pending:hover { 
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        
+        /* 进行中状态 - 主题橙色 */
+        .round-btn.running { 
+            background: var(--primary-dim); 
+            color: var(--primary);
+            border-color: var(--primary);
+            animation: pulse-ring 1.5s ease-in-out infinite;
+        }
+        .round-btn.running::before {
+            border-top-color: var(--white);
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes pulse-ring {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(255, 69, 0, 0.4); }
+            50% { box-shadow: 0 0 0 6px rgba(255, 69, 0, 0); }
+        }
+        
+        /* 完成状态 - 主题橙色 */
+        .round-btn.done { 
+            background: var(--primary); 
+            color: var(--white);
+            border-color: var(--primary);
+        }
+        .round-btn.done::before {
+            display: none;
+        }
+        .round-btn.done:hover {
+            transform: scale(1.15);
+            box-shadow: 0 0 12px var(--primary);
+        }
+        
+        /* 错误状态 - 红色 */
+        .round-btn.error { 
+            background: var(--accent-red); 
+            color: var(--white);
+            border-color: var(--accent-red);
+        }
+        .round-btn.error::before {
+            display: none;
+        }
+        
+        /* 激活/选中状态 */
+        .round-btn.active {
+            border-color: var(--white);
+            box-shadow: 0 0 12px var(--primary);
+            transform: scale(1.15);
+        }
+        
+        @keyframes spin { 
+            to { transform: rotate(360deg); } 
+        }
+        
+        /* Loading 动画 */
+        .loading-spinner { 
+            width: 14px; 
+            height: 14px; 
+            border: 2px solid var(--gray-600); 
+            border-top-color: var(--primary); 
+            border-radius: 50%; 
+            animation: spin 0.8s linear infinite;
+            flex-shrink: 0;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        /* 任务标签 */
+        .task-label { flex: 1; font-size: 0.7rem; color: var(--gray-300); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .task-status-icon { font-size: 0.7rem; }
+
+        /* 轮次 Popover */
+        .round-popover {
+            position: absolute;
+            z-index: 100;
+            background: var(--gray-900);
+            border: 1px solid var(--primary);
+            border-radius: 8px;
+            padding: 12px;
+            max-width: 400px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 0.7rem;
+            line-height: 1.5;
+            color: var(--gray-300);
+            white-space: pre-wrap;
+            word-break: break-word;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            display: none;
+            pointer-events: none;
+        }
+        .round-popover.visible {
+            display: block;
+        }
+        .round-popover.streaming {
+            border: 1px dashed var(--primary);
+            background: rgba(255,69,0,0.05);
+        }
+        /* Popover 标题 */
+        .round-popover-header {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.6rem;
+            color: var(--primary);
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--gray-700);
+        }
+        /* Popover 内容 */
+        .round-popover-content {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        /* 加载动画 */
+        .round-popover-loading {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--gray-400);
+        }
+        @keyframes blink { 0%,50%{opacity:1} 51%,100%{opacity:0} }
+
+        /* 卡片指标 */
+        .task-metrics { display: flex; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--gray-700); }
+        .task-metric { flex: 1; text-align: center; }
+        .task-metric-value { font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; font-weight: 600; color: var(--white); }
+        .task-metric-label { font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; color: var(--gray-500); }
+        
+        /* 最终结果 */
+        .task-result { 
+            display: none; 
+            margin-top: 8px; 
+            padding: 10px; 
+            background: var(--primary-dim); 
+            border-radius: 6px; 
+            border: 1px solid var(--primary);
+        }
+        .task-result.visible { display: block; }
+        .task-result-title { 
+            font-family: 'JetBrains Mono', monospace; 
+            font-size: 0.65rem; 
+            color: var(--primary); 
+            margin-bottom: 6px;
+            text-transform: uppercase;
+        }
+        .task-result-grid { 
+            display: grid; 
+            grid-template-columns: repeat(4, 1fr); 
+            gap: 8px; 
+        }
+        .task-result-item { text-align: center; }
+        .task-result-value { 
+            font-family: 'JetBrains Mono', monospace; 
+            font-size: 0.85rem; 
+            font-weight: 600; 
+            color: var(--white); 
+        }
+        .task-result-label { 
+            font-family: 'JetBrains Mono', monospace; 
+            font-size: 0.5rem; 
+            color: var(--gray-400); 
+            margin-top: 2px;
+        }
+
+        /* 空状态 */
+        .empty-tasks { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--gray-500); font-size: 0.9rem; }
+
+        /* 底部日志 */
+        .log-area {
+            grid-column: span 2;
+            background: var(--gray-800);
+            border: 1px solid var(--gray-700);
+            border-radius: 12px;
+            padding: 12px 16px;
+            overflow-x: auto;
+            overflow-y: auto;
+            display: flex;
+            flex-wrap: wrap;
+            align-content: flex-start;
+            gap: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+        }
+        .log-item { display: flex; align-items: center; gap: 8px; color: var(--gray-400); white-space: nowrap; flex-shrink: 0; }
+        .log-time { color: var(--gray-600); }
+        .log-tag { padding: 2px 8px; border-radius: 4px; font-size: 0.65rem; background: var(--gray-700); }
+        .log-tag.model { background: var(--primary-dim); color: var(--primary); }
+        .log-tag.case { background: rgba(72,219,251,0.15); color: var(--accent-cyan); }
+        .log-tag.round { background: rgba(29,209,161,0.15); color: var(--accent-green); }
+        .log-tag.error { background: rgba(255,107,107,0.15); color: var(--accent-red); }
+
+        /* 滚动条 */
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--gray-600); border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--gray-500); }
+
+        /* Toast */
+        .toast { position: fixed; top: 80px; left: 20px; background: var(--gray-800); border: 1px solid var(--gray-600); color: var(--white); padding: 12px 20px; border-radius: 8px; font-size: 0.85rem; z-index: 1000; transform: translateX(-120%); transition: transform 0.3s; }
+        .toast.show { transform: translateX(0); }
+        .toast.success { border-color: var(--accent-green); }
+        .toast.error { border-color: var(--accent-red); }
+
+        /* Modal */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: none; align-items: center; justify-content: center; z-index: 100; }
+        .modal-overlay.show { display: flex; }
+        .modal { background: var(--gray-800); border: 1px solid var(--gray-700); border-radius: 12px; padding: 24px; width: 400px; max-width: 90vw; }
+        .modal-title { font-family: 'Space Grotesk', sans-serif; font-size: 1.1rem; font-weight: 600; color: var(--white); margin-bottom: 20px; }
+        .form-group { margin-bottom: 16px; }
+        .form-label { font-size: 0.75rem; color: var(--gray-400); margin-bottom: 6px; display: block; }
+        .form-input { width: 100%; padding: 10px 14px; background: var(--gray-700); border: 1px solid var(--gray-600); border-radius: 8px; color: var(--white); font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; }
+        .form-input:focus { outline: none; border-color: var(--primary); }
+        textarea.form-input { min-height: 80px; resize: vertical; }
+        .form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+
+        /* 历史记录模态框 */
+        .history-modal { width: 800px; max-height: 80vh; }
+        .history-modal .modal-body { max-height: 60vh; overflow-y: auto; }
+        .history-list { display: flex; flex-direction: column; gap: 8px; }
+        .history-item { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            padding: 12px; 
+            background: var(--gray-700); 
+            border-radius: 8px; 
+            cursor: pointer; 
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+        .history-item:hover { background: var(--gray-600); border-color: var(--gray-500); }
+        .history-item.selected { border-color: var(--primary); background: var(--primary-dim); }
+        .history-info { flex: 1; }
+        .history-name { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--white); }
+        .history-meta { font-size: 0.7rem; color: var(--gray-400); margin-top: 4px; }
+        .history-stats { display: flex; gap: 16px; }
+        .history-stat { text-align: center; }
+        .history-stat-value { font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; color: var(--white); }
+        .history-stat-label { font-size: 0.6rem; color: var(--gray-500); }
+        .history-actions { display: flex; gap: 8px; }
+        
+        /* 响应式 */
+        @media (max-width: 1024px) {
+            .dashboard { grid-template-columns: 240px 1fr; }
+            .task-cards { grid-template-columns: 1fr; }
+            .history-modal { width: 90vw; }
+        }
+        @media (max-width: 768px) {
+            .dashboard { grid-template-columns: 1fr; grid-template-rows: 60px auto 1fr 100px; }
+            .panel-left { max-height: 200px; }
+            .header { flex-wrap: wrap; gap: 12px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <!-- 顶部栏 -->
+        <header class="header">
+            <div class="logo">
+                <button class="fullscreen-btn" onclick="toggleFullscreen()" title="全屏显示">
+                    <span class="fullscreen-icon" id="fullscreenIcon">⤢</span>
+                </button>
+                Czhmisaka
+                <span class="logo-tag">MODEL TEST</span>
+            </div>
+            <div class="status-row">
+                <div class="status-item">
+                    <span class="status-dot" id="sseDot"></span>
+                    <span class="status-label">SSE</span>
+                    <span class="status-value" id="sseStatus">--</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-dot" id="testDot"></span>
+                    <span class="status-label">TEST</span>
+                    <span class="status-value" id="testStatus">IDLE</span>
+                </div>
+            </div>
+            <div class="controls">
+                <button class="btn btn-primary" id="startBtn" onclick="startTest()">▶ START</button>
+                <button class="btn btn-secondary" id="stopBtn" onclick="stopTest()" disabled>■ STOP</button>
+                <button class="btn btn-secondary" id="clearBtn" onclick="clearTest()">✕ CLEAR</button>
+                <button class="btn btn-secondary" id="historyBtn" onclick="showHistoryModal()">☰ HISTORY</button>
+            </div>
+        </header>
+
+        <!-- 左侧：配置 -->
+        <div class="panel-left">
+            <!-- Models 列 -->
+            <div class="list-section">
+                <div class="list-header">
+                    <span>Models</span>
+                    <button class="add-btn" onclick="showModal('model')" style="width:auto;padding:2px 6px;flex-shrink:0">+</button>
+                </div>
+                <div class="item-list" id="modelList"></div>
+                <button class="add-btn" onclick="selectAllModels()" style="margin-top:4px;font-size:0.6rem;padding:4px;flex-shrink:0">Select All</button>
+            </div>
+            
+            <!-- Test Cases 列 -->
+            <div class="list-section">
+                <div class="list-header">
+                    <span>Test Cases</span>
+                    <button class="add-btn" onclick="showModal('case')" style="width:auto;padding:2px 6px;flex-shrink:0">+</button>
+                </div>
+                <div class="item-list" id="caseList"></div>
+                <button class="add-btn" onclick="selectAllCases()" style="margin-top:4px;font-size:0.6rem;padding:4px;flex-shrink:0">Select All</button>
+            </div>
+        </div>
+
+        <!-- 中间：任务卡片 -->
+        <div class="panel-main">
+            <div class="tasks-header">
+                <span class="tasks-title">Running Tasks</span>
+                <span class="tasks-count" id="tasksCount">0 tasks</span>
+            </div>
+            <div class="task-cards" id="taskCards">
+                <div class="empty-tasks">Select models and test cases, then click START</div>
+            </div>
+        </div>
+
+        <!-- 底部：日志 -->
+        <div class="log-area" id="logArea">
+            <div class="log-item">
+                <span class="log-time">--:--:--</span>
+                <span class="log-tag">SYSTEM</span>
+                <span>Ready</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal">
+            <div class="modal-title" id="modalTitle">Add Model</div>
+            <div id="modelForm">
+                <div class="form-group">
+                    <label class="form-label">Name</label>
+                    <input type="text" class="form-input" id="mName" placeholder="My Model">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Endpoint</label>
+                    <input type="text" class="form-input" id="mEndpoint" placeholder="https://api.example.com/v1/chat/completions">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">API Key</label>
+                    <input type="text" class="form-input" id="mKey" placeholder="sk-...">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Model</label>
+                    <input type="text" class="form-input" id="mModelName" placeholder="gpt-4o-mini">
+                </div>
+            </div>
+            <div id="caseForm" style="display:none">
+                <div class="form-group">
+                    <label class="form-label">Name</label>
+                    <input type="text" class="form-input" id="cName" placeholder="Test Case">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Prompt</label>
+                    <textarea class="form-input" id="cPrompt" placeholder="Enter prompt..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Max Tokens</label>
+                    <input type="number" class="form-input" id="cMaxTokens" value="500">
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-secondary" onclick="hideModal()">Cancel</button>
+                <button class="btn btn-primary" id="modalSubmit" onclick="submitModal()">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 测试启动配置 Modal -->
+    <div class="modal-overlay" id="startConfigModal">
+        <div class="modal">
+            <div class="modal-title">测试启动配置</div>
+            <div class="form-group">
+                <label class="form-label">测试轮数 (Test Rounds)</label>
+                <input type="number" class="form-input" id="configTestRounds" value="10" min="1" max="100">
+                <div style="font-size: 0.65rem; color: var(--gray-500); margin-top: 4px;">每个模型-测试用例组合重复测试的轮数</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">最大并发数 (Max Concurrent)</label>
+                <input type="number" class="form-input" id="configMaxConcurrent" value="3" min="1" max="10">
+                <div style="font-size: 0.65rem; color: var(--gray-500); margin-top: 4px;">同时运行的模型数量（0表示不限制）</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">请求间隔 (秒)</label>
+                <input type="number" class="form-input" id="configInterval" value="1" min="0" max="60" step="0.5">
+                <div style="font-size: 0.65rem; color: var(--gray-500); margin-top: 4px;">每轮测试之间的等待时间</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">测试名称（可选）</label>
+                <input type="text" class="form-input" id="configTestName" placeholder="自动生成">
+                <div style="font-size: 0.65rem; color: var(--gray-500); margin-top: 4px;">用于标识这次测试，方便历史记录查找</div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-secondary" onclick="hideStartConfigModal()">取消</button>
+                <button class="btn btn-primary" onclick="confirmStartTest()">确认启动</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 历史记录 Modal -->
+    <div class="modal-overlay" id="historyModal">
+        <div class="modal history-modal">
+            <div class="modal-title">测试历史记录</div>
+            <div class="modal-body">
+                <div class="history-list" id="historyList">
+                    <div style="color:var(--gray-500);text-align:center;padding:20px;">加载中...</div>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-secondary" onclick="hideHistoryModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let config = null;
+        let eventSource = null;
+        let modalType = 'model';
+        let selectedModels = new Set(JSON.parse(localStorage.getItem('selectedModels') || '[]'));
+        let selectedCases = new Set(JSON.parse(localStorage.getItem('selectedCases') || '[]'));
+        
+        // 任务卡片数据 - 支持并发子任务
+        let tasks = {}; // { taskId: { model_name, case_name, sub_tasks: {subId: {name, output, status, metrics}} } }
+        let activeSubTask = {}; // { taskId: 当前hover的subTaskId }
+        let lockedSubTask = {}; // { taskId: 是否锁定当前轮次输出 }
+        let activeTaskId = null; // 当前选中查看的任务ID
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadConfig();
+            loadTestStatus();
+            loadTestState(); // 加载并恢复测试状态
+            connectSSE();
+            setupFullscreenListener();
+        });
+        
+        // 全屏功能
+        let isFullscreen = false;
+        
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+                isFullscreen = true;
+                updateFullscreenIcon();
+            } else {
+                document.exitFullscreen();
+                isFullscreen = false;
+                updateFullscreenIcon();
+            }
+        }
+        
+        function updateFullscreenIcon() {
+            const icon = document.getElementById('fullscreenIcon');
+            if (icon) {
+                icon.textContent = isFullscreen ? '⤓' : '⤢';
+            }
+        }
+        
+        function setupFullscreenListener() {
+            document.addEventListener('fullscreenchange', () => {
+                isFullscreen = !!document.fullscreenElement;
+                updateFullscreenIcon();
+            });
+        }
+        
+        // 从服务器加载测试状态（用于页面刷新后恢复）
+        async function loadTestState() {
+            try {
+                const res = await fetch('/status');
+                const data = await res.json();
+                
+                // 优先从 tasks 恢复完整任务状态
+                const savedTasks = data.tasks || {};
+                const taskKeys = Object.keys(savedTasks);
+                
+                if (taskKeys.length > 0) {
+                    console.log(`[State] 恢复 ${taskKeys.length} 个任务状态`);
+                    
+                    // 恢复每个任务
+                    for (const [taskId, taskData] of Object.entries(savedTasks)) {
+                        const modelName = taskData.model_name;
+                        const caseName = taskData.test_case_name;
+                        const totalRounds = taskData.total_rounds || 10;
+                        const rounds = taskData.rounds || {};
+                        
+                        // 创建任务
+                        tasks[taskId] = {
+                            model_name: modelName,
+                            case_name: caseName,
+                            progress: 0,
+                            status: 'running',
+                            current_round: 0,
+                            total_rounds: totalRounds,
+                            sub_tasks: {}
+                        };
+                        
+                        // 恢复每个轮次的状态
+                        let doneCount = 0;
+                        let latestRound = 0;
+                        
+                        for (const [roundKey, roundData] of Object.entries(rounds)) {
+                            const subId = getSubTaskId(modelName, caseName, parseInt(roundKey));
+                            tasks[taskId].sub_tasks[subId] = {
+                                name: `Round ${roundKey}/${totalRounds}`,
+                                output: roundData.output || '',
+                                status: roundData.status || 'pending',
+                                metrics: roundData.metrics || {}
+                            };
+                            
+                            if (roundData.status === 'done') {
+                                doneCount++;
+                                latestRound = Math.max(latestRound, parseInt(roundKey));
+                            } else if (roundData.status === 'running') {
+                                latestRound = Math.max(latestRound, parseInt(roundKey));
+                            }
+                        }
+                        
+                        // 更新进度
+                        tasks[taskId].current_round = latestRound;
+                        tasks[taskId].progress = Math.round((latestRound / totalRounds) * 100);
+                        
+                        // 检查是否全部完成
+                        const subTasks = tasks[taskId].sub_tasks;
+                        const allDone = Object.values(subTasks).every(t => t.status === 'done' || t.status === 'error');
+                        if (allDone && Object.keys(subTasks).length >= totalRounds) {
+                            tasks[taskId].status = 'done';
+                        }
+                        
+                        // 默认选中最新轮次
+                        activeSubTask[taskId] = latestRound > 0 ? latestRound - 1 : 0;
+                    }
+                    
+                    renderTaskCards();
+                    
+                    // 检查是否有正在进行的测试
+                    const runningCount = taskKeys.filter(id => tasks[id].status === 'running').length;
+                    
+                    if (runningCount > 0) {
+                        // 测试仍在运行，更新UI
+                        document.getElementById('testDot').classList.add('running');
+                        document.getElementById('testStatus').textContent = 'RUNNING';
+                        document.getElementById('startBtn').disabled = true;
+                        document.getElementById('stopBtn').disabled = false;
+                    } else {
+                        // 测试已完成
+                        document.getElementById('testStatus').textContent = 'DONE';
+                    }
+                    
+                    console.log(`[State] 任务恢复完成`);
+                    return;
+                }
+                
+                // 备用：从历史事件恢复（向后兼容）
+                const history = data.history || [];
+                if (history.length > 0) {
+                    console.log(`[State] 从历史事件恢复 ${history.length} 个事件`);
+                    
+                    // 按时间顺序处理每个事件
+                    for (const event of history) {
+                        handleEvent({
+                            type: event.type,
+                            data: event.data
+                        });
+                    }
+                    
+                    // 检查是否有正在进行的测试
+                    const results = data.results || [];
+                    const runningCount = results.filter(r => {
+                        const taskId = getTaskId(r.model_name, r.test_case_name);
+                        const task = tasks[taskId];
+                        if (!task) return false;
+                        const subTasks = Object.values(task.sub_tasks || {});
+                        return subTasks.some(st => st.status === 'running');
+                    }).length;
+                    
+                    if (runningCount > 0) {
+                        document.getElementById('testDot').classList.add('running');
+                        document.getElementById('testStatus').textContent = 'RUNNING';
+                        document.getElementById('startBtn').disabled = true;
+                        document.getElementById('stopBtn').disabled = false;
+                    }
+                }
+            } catch(e) { 
+                console.error('[State] 加载状态失败:', e); 
+            }
+        }
+
+        async function loadConfig() {
+            try {
+                const res = await fetch('/config');
+                config = await res.json();
+                renderModels();
+                renderCases();
+            } catch(e) { console.error(e); }
+        }
+
+        async function loadTestStatus() {
+            try {
+                const res = await fetch('/test/status');
+                const data = await res.json();
+                if (data.running) {
+                    document.getElementById('testDot').classList.add('running');
+                    document.getElementById('testStatus').textContent = 'RUNNING';
+                    document.getElementById('startBtn').disabled = true;
+                    document.getElementById('stopBtn').disabled = false;
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        function renderModels() {
+            const models = config?.models || [];
+            const list = document.getElementById('modelList');
+            if (!models.length) {
+                list.innerHTML = '<div class="item"><span class="item-name" style="color:var(--gray-500)">No models</span></div>';
+                return;
+            }
+            list.innerHTML = models.map(m => `
+                <div class="item ${selectedModels.has(m.name) ? 'selected' : ''}" onclick="toggleModel('${m.name}')">
+                    <div class="item-checkbox">${selectedModels.has(m.name) ? '✓' : ''}</div>
+                    <div class="item-name">${m.name}</div>
+                    <button class="item-delete" onclick="event.stopPropagation();deleteModel('${m.name}')">×</button>
+                </div>
+            `).join('');
+        }
+
+        function renderCases() {
+            const cases = config?.test_cases || [];
+            const list = document.getElementById('caseList');
+            if (!cases.length) {
+                list.innerHTML = '<div class="item"><span class="item-name" style="color:var(--gray-500)">No cases</span></div>';
+                return;
+            }
+            list.innerHTML = cases.map(c => `
+                <div class="item ${selectedCases.has(c.id) ? 'selected' : ''}" onclick="toggleCase('${c.id}')">
+                    <div class="item-checkbox">${selectedCases.has(c.id) ? '✓' : ''}</div>
+                    <div class="item-name">${c.name}</div>
+                    <button class="item-delete" onclick="event.stopPropagation();deleteCase('${c.id}')">×</button>
+                </div>
+            `).join('');
+        }
+
+        function toggleModel(name) {
+            if (selectedModels.has(name)) selectedModels.delete(name);
+            else selectedModels.add(name);
+            localStorage.setItem('selectedModels', JSON.stringify([...selectedModels]));
+            renderModels();
+        }
+
+        function toggleCase(id) {
+            if (selectedCases.has(id)) selectedCases.delete(id);
+            else selectedCases.add(id);
+            localStorage.setItem('selectedCases', JSON.stringify([...selectedCases]));
+            renderCases();
+        }
+
+        // 全选/取消全选 Models
+        function selectAllModels() {
+            const models = config?.models || [];
+            if (selectedModels.size === models.length) {
+                // 取消全选
+                selectedModels.clear();
+            } else {
+                // 全选
+                models.forEach(m => selectedModels.add(m.name));
+            }
+            localStorage.setItem('selectedModels', JSON.stringify([...selectedModels]));
+            renderModels();
+        }
+
+        // 全选/取消全选 Cases
+        function selectAllCases() {
+            const cases = config?.test_cases || [];
+            if (selectedCases.size === cases.length) {
+                // 取消全选
+                selectedCases.clear();
+            } else {
+                // 全选
+                cases.forEach(c => selectedCases.add(c.id));
+            }
+            localStorage.setItem('selectedCases', JSON.stringify([...selectedCases]));
+            renderCases();
+        }
+
+        // Modal
+        function showModal(type) {
+            modalType = type;
+            document.getElementById('modalOverlay').classList.add('show');
+            document.getElementById('modalTitle').textContent = type === 'model' ? 'Add Model' : 'Add Test Case';
+            document.getElementById('modelForm').style.display = type === 'model' ? 'block' : 'none';
+            document.getElementById('caseForm').style.display = type === 'case' ? 'block' : 'none';
+        }
+
+        function hideModal() { document.getElementById('modalOverlay').classList.remove('show'); }
+
+        async function submitModal() {
+            if (modalType === 'model') {
+                const data = {
+                    name: document.getElementById('mName').value,
+                    endpoint: document.getElementById('mEndpoint').value,
+                    api_key: document.getElementById('mKey').value,
+                    model: document.getElementById('mModelName').value,
+                    enabled: true
+                };
+                if (!data.name || !data.endpoint || !data.model) {
+                    showToast('Please fill all fields', 'error');
+                    return;
+                }
+                const res = await fetch('/config/models', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                const result = await res.json();
+                if (result.error) showToast(result.error, 'error');
+                else {
+                    showToast('Model added', 'success');
+                    config.models = result.models;
+                    renderModels();
+                    hideModal();
+                }
+            } else {
+                const data = {
+                    name: document.getElementById('cName').value,
+                    prompt: document.getElementById('cPrompt').value,
+                    max_tokens: parseInt(document.getElementById('cMaxTokens').value) || 500,
+                    temperature: 0.7,
+                    stream: true
+                };
+                if (!data.name || !data.prompt) {
+                    showToast('Please fill all fields', 'error');
+                    return;
+                }
+                const res = await fetch('/config/test-cases', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                const result = await res.json();
+                if (result.error) showToast(result.error, 'error');
+                else {
+                    showToast('Test case added', 'success');
+                    config.test_cases = result.test_cases;
+                    renderCases();
+                    hideModal();
+                }
+            }
+        }
+
+        async function deleteModel(name) {
+            if (!confirm(`Delete "${name}"?`)) return;
+            const res = await fetch(`/config/models/${encodeURIComponent(name)}`, {method: 'DELETE'});
+            const result = await res.json();
+            config.models = result.models;
+            selectedModels.delete(name);
+            localStorage.setItem('selectedModels', JSON.stringify([...selectedModels]));
+            renderModels();
+            showToast('Deleted', 'success');
+        }
+
+        async function deleteCase(id) {
+            if (!confirm('Delete this case?')) return;
+            const res = await fetch(`/config/test-cases/${id}`, {method: 'DELETE'});
+            const result = await res.json();
+            config.test_cases = result.test_cases;
+            selectedCases.delete(id);
+            localStorage.setItem('selectedCases', JSON.stringify([...selectedCases]));
+            renderCases();
+            showToast('Deleted', 'success');
+        }
+
+        // Test Control
+        // 启动测试时显示配置弹窗
+        function startTest() {
+            if (selectedModels.size === 0 || selectedCases.size === 0) {
+                showToast('Select at least one model and test case', 'error');
+                return;
+            }
+            // 显示配置弹窗
+            document.getElementById('startConfigModal').classList.add('show');
+        }
+
+        // 隐藏启动配置弹窗
+        function hideStartConfigModal() {
+            document.getElementById('startConfigModal').classList.remove('show');
+        }
+
+        // 确认启动测试（带配置）
+        async function confirmStartTest() {
+            // 获取配置参数
+            const testRounds = parseInt(document.getElementById('configTestRounds').value) || 10;
+            const maxConcurrent = parseInt(document.getElementById('configMaxConcurrent').value) || 3;
+            const interval = parseFloat(document.getElementById('configInterval').value) || 1;
+            const testName = document.getElementById('configTestName').value.trim();
+            
+            // 隐藏弹窗
+            hideStartConfigModal();
+            
+            // 清空之前的结果
+            tasks = {};
+            renderTaskCards();
+            
+            const modelsToTest = Array.from(selectedModels);
+            const casesToTest = Array.from(selectedCases);
+            
+            // 调试日志
+            console.log('[Start] Models:', modelsToTest);
+            console.log('[Start] Cases:', casesToTest);
+            console.log('[Start] Config - testRounds:', testRounds, 'maxConcurrent:', maxConcurrent, 'interval:', interval);
+            
+            try {
+                const res = await fetch('/test/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        models: modelsToTest,
+                        cases: casesToTest,
+                        test_rounds: testRounds,
+                        max_concurrent: maxConcurrent,
+                        interval: interval,
+                        test_name: testName
+                    })
+                });
+                const result = await res.json();
+                if (result.error) {
+                    showToast(result.error, 'error');
+                    return;
+                }
+                
+                console.log('[Start] Response:', result);
+                
+                // 立即创建任务卡片（不等待 SSE 事件）
+                if (result.config) {
+                    const { models, cases, total_rounds, client_count, concurrency } = result.config;
+                    console.log('[Start] Response config:', result.config);
+                    console.log('[Start] total_rounds from response:', total_rounds);
+                    
+                    // 使用传入的 total_rounds，如果不存在则默认为 10
+                    const rounds = total_rounds || 10;
+                    console.log('[Start] Using rounds:', rounds);
+                    
+                    // 先创建所有任务卡片，不触发滚动
+                    models.forEach(m => {
+                        cases.forEach(c => {
+                            const taskId = getTaskId(m, c);
+                            
+                            // 临时禁用滚动
+                            const prevActiveTaskId = activeTaskId;
+                            activeTaskId = null;
+                            
+                            createTask(m, c, rounds);
+                            
+                            // 恢复之前的状态
+                            activeTaskId = prevActiveTaskId;
+                        });
+                    });
+                    
+                    // 所有任务创建完成后，选中最后一个任务并滚动到可见区域
+                    const lastTaskId = getTaskId(models[models.length - 1], cases[cases.length - 1]);
+                    activeTaskId = lastTaskId;
+                    renderTaskCards();
+                    
+                    addLog(new Date().toLocaleTimeString(), 'START', `${models.length} models × ${cases.length} cases (${rounds} rounds each) [concurrency: ${concurrency ? 'ON' : 'OFF'}]`);
+                }
+                
+                showToast('Test started', 'success');
+                document.getElementById('testDot').classList.add('running');
+                document.getElementById('testStatus').textContent = 'RUNNING';
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+            } catch(e) { 
+                console.error('[Start] Error:', e);
+                showToast('Failed to start', 'error'); 
+            }
+        }
+
+        async function stopTest() {
+            try {
+                await fetch('/test/stop', {method: 'POST'});
+                showToast('Test stopped', 'success');
+                document.getElementById('testDot').classList.remove('running');
+                document.getElementById('testStatus').textContent = 'STOPPED';
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+            } catch(e) { showToast('Failed to stop', 'error'); }
+        }
+
+        // Clear - 清空测试任务
+        async function clearTest() {
+            // 清空前端的 tasks 变量
+            tasks = {};
+            activeSubTask = {};
+            
+            // 调用后端 /reset API 重置状态
+            try {
+                await fetch('/reset', {method: 'POST'});
+            } catch(e) { 
+                console.error('Reset API error:', e); 
+            }
+            
+            // 重新渲染任务卡片（显示空状态）
+            renderTaskCards();
+            
+            // 重置状态指示
+            document.getElementById('testDot').classList.remove('running');
+            document.getElementById('testStatus').textContent = 'IDLE';
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            
+            showToast('Cleared', 'success');
+        }
+
+        // SSE
+        function connectSSE() {
+            eventSource = new EventSource('/events');
+            eventSource.onopen = () => {
+                document.getElementById('sseDot').classList.add('connected');
+                document.getElementById('sseStatus').textContent = 'OK';
+            };
+            eventSource.onmessage = (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    handleEvent(data);
+                } catch(err) {}
+            };
+            eventSource.onerror = () => {
+                document.getElementById('sseDot').classList.remove('connected');
+                document.getElementById('sseStatus').textContent = 'RETRY';
+                setTimeout(connectSSE, 3000);
+            };
+        }
+
+        // 获取任务ID
+        function getTaskId(modelName, caseName) {
+            return `${modelName}__${caseName}`;
+        }
+
+        // 获取子任务ID
+        function getSubTaskId(modelName, caseName, round) {
+            return `${modelName}__${caseName}__${round}`;
+        }
+
+        // 创建任务卡片（支持预创建所有轮次占位）
+        function createTask(modelName, caseName, totalRounds = 10) {
+            const taskId = getTaskId(modelName, caseName);
+            
+            // 如果任务已存在但需要更新轮次数，保留现有状态
+            const existingTask = tasks[taskId];
+            
+            tasks[taskId] = {
+                model_name: modelName,
+                case_name: caseName,
+                progress: 0,
+                status: 'running',
+                current_round: 0,
+                total_rounds: totalRounds,
+                sub_tasks: existingTask ? existingTask.sub_tasks : {}
+            };
+            
+            // 预创建所有轮次的占位任务（无论是否存在都重新创建，确保数量正确）
+            if (totalRounds > 0) {
+                for (let r = 1; r <= totalRounds; r++) {
+                    const subId = getSubTaskId(modelName, caseName, r);
+                    // 如果已存在则保留，否则创建新的
+                    if (!tasks[taskId].sub_tasks[subId]) {
+                        tasks[taskId].sub_tasks[subId] = {
+                            name: `Round ${r}/${totalRounds}`,
+                            output: '',
+                            status: 'pending',  // 待测试状态
+                            metrics: {}
+                        };
+                    } else {
+                        // 更新 name 以确保 totalRounds 正确
+                        tasks[taskId].sub_tasks[subId].name = `Round ${r}/${totalRounds}`;
+                    }
+                }
+            }
+            
+            // 默认选中最后一个子任务（最新轮次，使用索引 totalRounds - 1）
+            if (activeSubTask[taskId] === undefined || activeSubTask[taskId] === null) {
+                activeSubTask[taskId] = Math.max(0, totalRounds - 1);
+            }
+            
+            // 设置为当前选中查看的任务
+            activeTaskId = taskId;
+            
+            renderTaskCards();
+        }
+
+        // 创建或更新子任务
+        function updateSubTask(modelName, caseName, round, totalRounds, status = 'running') {
+            const taskId = getTaskId(modelName, caseName);
+            const subId = getSubTaskId(modelName, caseName, round);
+            
+            // 如果任务不存在，先创建任务卡片
+            if (!tasks[taskId]) {
+                // 预创建所有轮次的占位任务
+                tasks[taskId] = {
+                    model_name: modelName,
+                    case_name: caseName,
+                    progress: 0,
+                    status: 'running',
+                    current_round: round,
+                    total_rounds: totalRounds,
+                    sub_tasks: {}
+                };
+                
+                // 预创建所有轮次的占位任务
+                for (let r = 1; r <= totalRounds; r++) {
+                    const sid = getSubTaskId(modelName, caseName, r);
+                    tasks[taskId].sub_tasks[sid] = {
+                        name: `Round ${r}/${totalRounds}`,
+                        output: '',
+                        status: r === round ? status : 'pending',  // 当前轮次标记为running，其他为pending
+                        metrics: {}
+                    };
+                }
+                
+                // 默认选中当前轮次的索引（从0开始，所以是 round-1）
+                activeSubTask[taskId] = round - 1;
+            } else {
+                // 任务已存在，更新轮次信息
+                tasks[taskId].total_rounds = totalRounds;
+                
+                // 如果当前轮次的任务不存在，创建它
+                if (!tasks[taskId].sub_tasks[subId]) {
+                    tasks[taskId].sub_tasks[subId] = {
+                        name: `Round ${round}/${totalRounds}`,
+                        output: '',
+                        status: status,
+                        metrics: {}
+                    };
+                } else {
+                    tasks[taskId].sub_tasks[subId].status = status;
+                }
+                
+                // 设置当前活跃的子任务（使用数字索引而非subId）
+                if (activeSubTask[taskId] === undefined || activeSubTask[taskId] === null) {
+                    // 找到当前轮次在数组中的索引
+                    const subTaskKeys = Object.keys(tasks[taskId].sub_tasks);
+                    const idx = subTaskKeys.indexOf(subId);
+                    activeSubTask[taskId] = idx >= 0 ? idx : 0;
+                }
+            }
+            
+            // 更新任务进度
+            tasks[taskId].current_round = round;
+            tasks[taskId].progress = Math.round((round / totalRounds) * 100);
+            
+            // 检查是否全部完成
+            const subTasks = tasks[taskId].sub_tasks;
+            const allDone = Object.values(subTasks).every(t => t.status === 'done' || t.status === 'error');
+            if (allDone && Object.keys(subTasks).length >= totalRounds) {
+                tasks[taskId].status = 'done';
+            } else {
+                tasks[taskId].status = 'running';
+            }
+            
+            return subId;
+        }
+
+        // 根据轮次数量计算网格列数（根据需求：10轮→7列，50轮→20列，100轮→30列）
+        function getGridColumns(totalRounds) {
+            // 线性插值计算列数
+            // 10轮 = 7列, 50轮 = 20列, 100轮 = 30列
+            if (totalRounds <= 10) return 7;
+            if (totalRounds <= 50) {
+                // 10-50轮：从7列线性增加到20列
+                return Math.round(7 + (totalRounds - 10) * (20 - 7) / (50 - 10));
+            }
+            // 50-100轮：从20列线性增加到30列
+            return Math.round(20 + (Math.min(totalRounds, 100) - 50) * (30 - 20) / (100 - 50));
+        }
+
+        // 根据轮次数量计算字体大小
+        function getFontSize(totalRounds) {
+            if (totalRounds <= 10) return '0.6rem';
+            if (totalRounds <= 20) return '0.55rem';
+            if (totalRounds <= 30) return '0.5rem';
+            if (totalRounds <= 50) return '0.45rem';
+            return '0.4rem';
+        }
+
+        // 去除文本中的多余空格和换行
+        function trimText(text) {
+            if (!text) return '';
+            // 替换所有换行符为空格，将多个连续空格替换为单个空格
+            return text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+
+        // 渲染任务卡片
+        function renderTaskCards() {
+            const container = document.getElementById('taskCards');
+            const taskIds = Object.keys(tasks);
+            document.getElementById('tasksCount').textContent = `${taskIds.length} tasks`;
+            
+            if (taskIds.length === 0) {
+                container.innerHTML = '<div class="empty-tasks">Select models and test cases, then click START</div>';
+                return;
+            }
+            
+            container.innerHTML = taskIds.map(id => {
+                const t = tasks[id];
+                // 判断是否为当前选中查看的任务
+                const isActiveTask = activeTaskId === id;
+                const subTasks = Object.values(t.sub_tasks || {});
+                const activeIdx = activeSubTask[id];
+                const activeTask = activeIdx !== undefined && activeIdx !== null ? subTasks[activeIdx] : null;
+                const totalRounds = t.total_rounds || 10;
+                
+                // 根据轮次数量计算网格列数和字体大小
+                const gridColumns = getGridColumns(totalRounds);
+                const fontSize = getFontSize(totalRounds);
+                
+                // 统计状态
+                const runningCount = subTasks.filter(st => st.status === 'running').length;
+                const doneCount = subTasks.filter(st => st.status === 'done').length;
+                const errorCount = subTasks.filter(st => st.status === 'error').length;
+                
+                // 计算最终结果（所有完成轮次的平均值）
+                // 只包含有有效 metrics 的完成任务
+                const doneTasks = subTasks.filter(st => {
+                    if (st.status !== 'done') return false;
+                    if (!st.metrics) return false;
+                    // 检查 metrics 是否有实际数据
+                    const m = st.metrics;
+                    return (m.ttft_seconds && m.ttft_seconds !== '--') || 
+                           (m.tpft_seconds && m.tpft_seconds !== '--') || 
+                           (m.output_tokens && m.output_tokens !== '--') ||
+                           (m.tokens_per_second && m.tokens_per_second !== '--');
+                });
+                const isAllDone = doneCount === subTasks.length && subTasks.length > 0;
+                
+                let avgTtft = '--', avgTpft = '--', avgTokens = '--', avgSpeed = '--';
+                if (doneTasks.length > 0) {
+                    // 收集有效的指标值
+                    const ttftValues = [], tpftValues = [], tokenValues = [], speedValues = [];
+                    
+                    doneTasks.forEach(t => {
+                        if (!t.metrics) return;
+                        const m = t.metrics;
+                        // 解析 ttft
+                        if (m.ttft_seconds && m.ttft_seconds !== '--') {
+                            const v = parseFloat(m.ttft_seconds);
+                            if (!isNaN(v)) ttftValues.push(v);
+                        }
+                        // 解析 tpft
+                        if (m.tpft_seconds && m.tpft_seconds !== '--') {
+                            const v = parseFloat(m.tpft_seconds);
+                            if (!isNaN(v)) tpftValues.push(v);
+                        }
+                        // 解析 tokens
+                        if (m.output_tokens && m.output_tokens !== '--') {
+                            const v = parseFloat(m.output_tokens);
+                            if (!isNaN(v)) tokenValues.push(v);
+                        }
+                        // 解析 speed
+                        if (m.tokens_per_second && m.tokens_per_second !== '--') {
+                            const v = parseFloat(m.tokens_per_second);
+                            if (!isNaN(v)) speedValues.push(v);
+                        }
+                    });
+                    
+                    // 计算平均值（只有有效值才计算）
+                    if (ttftValues.length > 0) {
+                        avgTtft = (ttftValues.reduce((a,b) => a+b, 0) / ttftValues.length).toFixed(3);
+                    }
+                    if (tpftValues.length > 0) {
+                        avgTpft = (tpftValues.reduce((a,b) => a+b, 0) / tpftValues.length).toFixed(3);
+                    }
+                    if (tokenValues.length > 0) {
+                        avgTokens = Math.round(tokenValues.reduce((a,b) => a+b, 0) / tokenValues.length);
+                    }
+                    if (speedValues.length > 0) {
+                        avgSpeed = (speedValues.reduce((a,b) => a+b, 0) / speedValues.length).toFixed(1);
+                    }
+                }
+                
+                // 处理输出文本：pending/done 状态时 trim，running 状态时保留原始格式以便观察流式输出
+                let outputText;
+                if (activeTask && activeTask.output) {
+                    if (activeTask.status === 'running') {
+                        // 流式输出时保留原始内容，让用户看到实时输出
+                        outputText = activeTask.output.substring(0, 1000);
+                    } else {
+                        // 完成后优化显示
+                        outputText = trimText(activeTask.output.substring(0, 1000));
+                    }
+                } else {
+                    outputText = activeTask ? '等待中...' : '悬停查看输出';
+                }
+                
+                return `
+                <div class="task-card ${t.status}" id="card-${id}" data-task-id="${id}">
+                    <div class="task-header">
+                        <div class="task-info">
+                            <div class="task-model">${t.model_name}</div>
+                            <div class="task-case">${t.case_name}</div>
+                        </div>
+                        <span class="task-status ${t.status}">${runningCount > 0 ? '⟳' : t.status === 'done' ? '✓' : '!'} ${doneCount}/${subTasks.length}</span>
+                    </div>
+                    <div class="task-progress">
+                        <div class="task-progress-bar">
+                            <div class="task-progress-fill" style="width:${t.progress}%"></div>
+                        </div>
+                        <div class="task-progress-text">
+                            <span>${t.current_round || 0}/${t.total_rounds || 0}</span>
+                            <span>${t.progress}%</span>
+                        </div>
+                    </div>
+                    <div class="task-content">
+                        <div class="task-io">
+                            <div class="task-io-header">轮次 Rounds - 悬停查看输出</div>
+                            <div class="round-matrix" style="grid-template-columns: repeat(${gridColumns}, 1fr);">
+                                ${subTasks.map((st, idx) => {
+                                    const roundNum = idx + 1;
+                                    let statusIcon = roundNum;
+                                    if (st.status === 'done') statusIcon = '✓';
+                                    else if (st.status === 'error') statusIcon = '✗';
+                                    else if (st.status === 'running') statusIcon = '⟳';
+                                    
+                                    // 获取输出内容
+                                    const outputContent = st.output ? (st.status === 'running' ? st.output.substring(0, 500) : trimText(st.output.substring(0, 500))) : (st.status === 'pending' ? '等待中...' : '无输出');
+                                    
+                                    // 获取指标信息（速度、tokens等）
+                                    let metricsInfo = '';
+                                    if (st.metrics && st.status === 'done') {
+                                        const speed = st.metrics.tokens_per_second && st.metrics.tokens_per_second !== '--' ? st.metrics.tokens_per_second : null;
+                                        const tokens = st.metrics.output_tokens && st.metrics.output_tokens !== '--' ? st.metrics.output_tokens : null;
+                                        const ttft = st.metrics.ttft_seconds && st.metrics.ttft_seconds !== '--' ? st.metrics.ttft_seconds : null;
+                                        const tpft = st.metrics.tpft_seconds && st.metrics.tpft_seconds !== '--' ? st.metrics.tpft_seconds : null;
+                                        
+                                        if (speed || tokens || ttft || tpft) {
+                                            const parts = [];
+                                            if (speed) parts.push(`速度: ${speed} t/s`);
+                                            if (tokens) parts.push(`Tokens: ${tokens}`);
+                                            if (ttft) parts.push(`TTFT: ${ttft}s`);
+                                            if (tpft) parts.push(`TPFT: ${tpft}s`);
+                                            metricsInfo = parts.join(' | ');
+                                        }
+                                    }
+                                    
+                                    return `<div class="round-btn ${st.status}"
+                                                 style="font-size:${fontSize}"
+                                                 data-task-id="${id}"
+                                                 data-idx="${idx}"
+                                                 data-output="${escapeHtml(outputContent)}"
+                                                 data-status="${st.status}"
+                                                 data-name="${st.name}"
+                                                 data-metrics="${escapeHtml(metricsInfo)}"
+                                                 onmouseenter="showRoundPopover(this, event)"
+                                                 onmouseleave="hideRoundPopover()"
+                                                 title="${st.name}${st.metrics?.speed ? ' - ' + st.metrics.speed + ' t/s' : ''}">${statusIcon}</div>`;
+                                }).join('')}
+                                ${subTasks.length === 0 ? '<div style="color:var(--gray-500);font-size:0.7rem;">等待中...</div>' : ''}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="task-metrics">
+                        <div class="task-metric">
+                            <div class="task-metric-value">${doneCount}</div>
+                            <div class="task-metric-label">完成</div>
+                        </div>
+                        <div class="task-metric">
+                            <div class="task-metric-value">${runningCount}</div>
+                            <div class="task-metric-label">进行中</div>
+                        </div>
+                        <div class="task-metric">
+                            <div class="task-metric-value">${errorCount}</div>
+                            <div class="task-metric-label">错误</div>
+                        </div>
+                        <div class="task-metric">
+                            <div class="task-metric-value">${t.total_rounds || 0}</div>
+                            <div class="task-metric-label">总计</div>
+                        </div>
+                    </div>
+                    ${isAllDone ? `
+                    <div class="task-result visible">
+                        <div class="task-result-title">最终结果</div>
+                        <div class="task-result-grid">
+                            <div class="task-result-item">
+                                <div class="task-result-value">${avgTtft}s</div>
+                                <div class="task-result-label">首Token</div>
+                            </div>
+                            <div class="task-result-item">
+                                <div class="task-result-value">${avgTpft}s</div>
+                                <div class="task-result-label">生成时间</div>
+                            </div>
+                            <div class="task-result-item">
+                                <div class="task-result-value">${avgTokens}</div>
+                                <div class="task-result-label">输出Token</div>
+                            </div>
+                            <div class="task-result-item">
+                                <div class="task-result-value">${avgSpeed}</div>
+                                <div class="task-result-label">速度/s</div>
+                            </div>
+                        </div>
+                    </div>
+                    ` : ''}
+                </div>
+                `;
+            }).join('');
+            
+            // 为输出区设置文本内容（从 data-text 属性）
+            document.querySelectorAll('.hover-output').forEach(el => {
+                const text = el.getAttribute('data-text');
+                if (text) {
+                    el.textContent = text;
+                }
+            });
+        }
+
+        // 选择子任务（hover时调用）
+        function selectSubTask(taskId, idx) {
+            // 直接使用索引
+            const t = tasks[taskId];
+            if (!t) return;
+            
+            // 设置当前激活的子任务索引
+            activeSubTask[taskId] = idx;
+            renderTaskCards();
+        }
+
+        // 鼠标离开任务卡片时，自动切换到最新的一次输出（仅在测试进行中时）
+        function resetToLatest(taskId) {
+            const t = tasks[taskId];
+            if (!t) return;
+            
+            // 只有在测试进行中（不是全部完成）时才自动切换
+            // 如果测试已完成，用户可以自由查看任意轮次
+            if (t.status === 'done') {
+                return;
+            }
+            
+            const subTasks = Object.values(t.sub_tasks || {});
+            if (subTasks.length === 0) return;
+            
+            // 找到最后一个非 pending 状态的轮次
+            let latestIdx = -1;
+            
+            // 首先尝试找到最后一个 done 状态的轮次
+            for (let i = subTasks.length - 1; i >= 0; i--) {
+                if (subTasks[i].status === 'done') {
+                    latestIdx = i;
+                    break;
+                }
+            }
+            
+            // 如果没有 done 状态，找最后一个 running 状态
+            if (latestIdx === -1) {
+                for (let i = subTasks.length - 1; i >= 0; i--) {
+                    if (subTasks[i].status === 'running') {
+                        latestIdx = i;
+                        break;
+                    }
+                }
+            }
+            
+            // 如果还没有，找到最后一个有输出的轮次
+            if (latestIdx === -1) {
+                for (let i = subTasks.length - 1; i >= 0; i--) {
+                    if (subTasks[i].output && subTasks[i].output.length > 0) {
+                        latestIdx = i;
+                        break;
+                    }
+                }
+            }
+            
+            // 如果还没有任何输出，选中第一个
+            if (latestIdx === -1) {
+                latestIdx = 0;
+            }
+            
+            // 设置当前激活的子任务为最新
+            activeSubTask[taskId] = latestIdx;
+            renderTaskCards();
+        }
+
+        // 锁定/解锁当前轮次输出
+        function toggleLock(taskId) {
+            lockedSubTask[taskId] = !lockedSubTask[taskId];
+            renderTaskCards();
+        }
+
+        // 处理 SSE 事件
+        function handleEvent(event) {
+            const {type, data: eventData} = event;
+            const data = eventData;  // 后端数据在 data 字段中
+            const now = new Date().toLocaleTimeString();
+            const taskId = data.model_name && data.test_case_name ? getTaskId(data.model_name, data.test_case_name) : null;
+            
+            // 从事件数据中获取当前轮次
+            const currentRound = data.current_round || 1;
+            const totalRounds = data.total_rounds || 10;
+            const subTaskId = taskId ? getSubTaskId(data.model_name, data.test_case_name, currentRound) : null;
+
+            switch(type) {
+                case 'start':
+                    // 创建所有任务卡片，使用传入的 total_rounds
+                    const models = data.models || [];
+                    const cases = data.test_cases || [];
+                    const startTotalRounds = data.total_rounds || 10;
+                    models.forEach(m => {
+                        cases.forEach(c => {
+                            createTask(m, c, startTotalRounds);
+                        });
+                    });
+                    addLog(now, 'START', `${models.length} models × ${cases.length} cases (${startTotalRounds} rounds each)`);
+                    break;
+                    
+                case 'progress':
+                    if (taskId) {
+                        // 确保子任务存在
+                        updateSubTask(data.model_name, data.test_case_name, currentRound, totalRounds, 'running');
+                        renderTaskCards();
+                    }
+                    addLog(now, 'ROUND', `${data.model_name}: ${currentRound}/${totalRounds}`);
+                    break;
+                    
+                case 'chunk':
+                    if (subTaskId && taskId && tasks[taskId] && tasks[taskId].sub_tasks[subTaskId]) {
+                        // 追加到对应的子任务输出
+                        tasks[taskId].sub_tasks[subTaskId].output += data.content;
+                        
+                        // 找到当前激活的任务索引
+                        const activeIdx = activeSubTask[taskId];
+                        if (activeIdx !== undefined && activeIdx !== null) {
+                            const taskSubTasks = Object.keys(tasks[taskId].sub_tasks);
+                            // activeIdx 是数字索引
+                            const activeSubTaskId = taskSubTasks[activeIdx];
+                            // 如果当前激活的任务正好是这个 subTaskId
+                            // 或者直接比较 round 数字
+                            const currentRound = data.current_round || 1;
+                            const activeRound = activeIdx + 1;
+                            
+                            if (activeSubTaskId === subTaskId || activeRound === currentRound) {
+                                const outputEl = document.getElementById(`output-${taskId}`);
+                                if (outputEl) {
+                                    // 流式输出时直接显示原始内容（不 trim），让用户看到实时输出
+                                    // 完成后再使用 trimText 优化显示
+                                    const currentOutput = tasks[taskId].sub_tasks[subTaskId].output || '';
+                                    outputEl.textContent = currentOutput.substring(0, 1000);
+                                    outputEl.scrollTop = outputEl.scrollHeight;
+                                }
+                            }
+                        }
+                    }
+                    break;
+                    
+                case 'complete':
+                    if (taskId && tasks[taskId] && subTaskId && tasks[taskId].sub_tasks[subTaskId]) {
+                        // 更新子任务状态
+                        tasks[taskId].sub_tasks[subTaskId].status = data.success ? 'done' : 'error';
+                        tasks[taskId].sub_tasks[subTaskId].metrics = {
+                            ttft: data.metrics?.ttft_seconds?.toFixed(3) || '--',
+                            tpft: data.metrics?.tpft_seconds?.toFixed(3) || '--',
+                            tokens: data.metrics?.output_tokens || '--',
+                            speed: data.metrics?.tokens_per_second?.toFixed(1) || '--'
+                        };
+                        
+                        // 找到当前激活的任务索引
+                        const activeIdx = activeSubTask[taskId];
+                        if (activeIdx !== undefined && activeIdx !== null) {
+                            const taskSubTasks = Object.keys(tasks[taskId].sub_tasks);
+                            const activeSubTaskId = taskSubTasks[activeIdx];
+                            // 比较 round 数字
+                            const currentRound = data.current_round || 1;
+                            const activeRound = activeIdx + 1;
+                            
+                            // 如果当前激活的任务正好是这个
+                            if (activeSubTaskId === subTaskId || activeRound === currentRound) {
+                                const outputEl = document.getElementById(`output-${taskId}`);
+                                if (outputEl) {
+                                    outputEl.classList.remove('streaming');
+                                    // 去除多余空格和换行
+                                    outputEl.textContent = trimText((tasks[taskId].sub_tasks[subTaskId].output || '').substring(0, 1000));
+                                }
+                            }
+                        }
+                        
+                        // 更新任务卡片状态
+                        const subTasks = tasks[taskId].sub_tasks;
+                        const allDone = Object.values(subTasks).every(t => t.status === 'done' || t.status === 'error');
+                        if (allDone && Object.keys(subTasks).length >= totalRounds) {
+                            tasks[taskId].status = 'done';
+                        }
+                        
+                        renderTaskCards();
+                    }
+                    addLog(now, 'DONE', `${data.model_name} → ${data.test_case_name} R${currentRound}`);
+                    break;
+                    
+                case 'summary':
+                    document.getElementById('testDot').classList.remove('running');
+                    document.getElementById('testStatus').textContent = 'DONE';
+                    document.getElementById('startBtn').disabled = false;
+                    document.getElementById('stopBtn').disabled = true;
+                    addLog(now, 'FINISH', 'All tests complete');
+                    break;
+                    
+                case 'error':
+                    if (taskId && tasks[taskId]) {
+                        tasks[taskId].status = 'error';
+                        if (subTaskId && tasks[taskId].sub_tasks[subTaskId]) {
+                            tasks[taskId].sub_tasks[subTaskId].status = 'error';
+                        }
+                        renderTaskCards();
+                    }
+                    addLog(now, 'ERROR', data.error || 'Unknown error');
+                    showToast('Error: ' + (data.error || 'Unknown'), 'error');
+                    break;
+            }
+        }
+
+        function addLog(time, tag, msg) {
+            const logArea = document.getElementById('logArea');
+            const html = `
+                <div class="log-item">
+                    <span class="log-time">${time}</span>
+                    <span class="log-tag ${tag.toLowerCase()}">${tag}</span>
+                    <span>${msg}</span>
+                </div>
+            `;
+            logArea.insertAdjacentHTML('beforeend', html);
+            logArea.scrollLeft = logArea.scrollWidth;
+        }
+
+        function escapeHtml(t) {
+            const d = document.createElement('div');
+            d.textContent = t;
+            return d.innerHTML;
+        }
+
+        function showToast(msg, type = '') {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'toast ' + type;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 3000);
+        }
+
+        // ===== 历史记录功能 =====
+        async function showHistoryModal() {
+            document.getElementById('historyModal').classList.add('show');
+            await loadHistory();
+        }
+
+        function hideHistoryModal() {
+            document.getElementById('historyModal').classList.remove('show');
+        }
+
+        async function loadHistory() {
+            const listEl = document.getElementById('historyList');
+            try {
+                const res = await fetch('/api/history?limit=20');
+                const data = await res.json();
+                
+                if (!data.success || !data.data || data.data.length === 0) {
+                    listEl.innerHTML = '<div style="color:var(--gray-500);text-align:center;padding:20px;">暂无历史记录</div>';
+                    return;
+                }
+                
+                listEl.innerHTML = data.data.map(g => {
+                    const startTime = g.start_time ? new Date(g.start_time).toLocaleString('zh-CN') : '--';
+                    const config = g.config || {};
+                    const models = config.models || [];
+                    const testCases = config.test_cases || [];
+                    
+                    return `
+                        <div class="history-item" onclick="viewHistoryDetail('${g.group_id}')">
+                            <div class="history-info">
+                                <div class="history-name">${g.name || g.group_id}</div>
+                                <div class="history-meta">
+                                    ${startTime} • ${models.length} 模型 × ${testCases.length} 测试用例 • ${g.total_rounds || 0} 轮
+                                </div>
+                            </div>
+                            <div class="history-stats">
+                                <div class="history-stat">
+                                    <div class="history-stat-value">${g.completed_rounds || 0}</div>
+                                    <div class="history-stat-label">完成</div>
+                                </div>
+                                <div class="history-stat">
+                                    <div class="history-stat-value" style="color:var(--accent-green)">${g.success_count || 0}</div>
+                                    <div class="history-stat-label">成功</div>
+                                </div>
+                                <div class="history-stat">
+                                    <div class="history-stat-value" style="color:var(--accent-red)">${g.failed_count || 0}</div>
+                                    <div class="history-stat-label">失败</div>
+                                </div>
+                            </div>
+                            <div class="history-actions">
+                                <button class="btn btn-secondary" style="padding:6px 12px;font-size:0.65rem" onclick="event.stopPropagation();showEditGroupModal('${g.group_id}')">编辑</button>
+                                <button class="btn btn-secondary" style="padding:6px 12px;font-size:0.65rem" onclick="event.stopPropagation();deleteHistory('${g.group_id}')">删除</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch(e) {
+                listEl.innerHTML = '<div style="color:var(--accent-red);text-align:center;padding:20px;">加载失败: ' + e.message + '</div>';
+            }
+        }
+
+        // 加载历史任务组到当前界面
+        async function loadHistoryGroup(groupId) {
+            try {
+                // 获取任务组详情
+                const res = await fetch(`/api/history/${groupId}`);
+                const data = await res.json();
+                
+                if (!data.success) {
+                    showToast('加载失败: ' + data.error, 'error');
+                    return;
+                }
+                
+                const summary = data.data;
+                const group = summary.group;
+                const config = group.config_json ? JSON.parse(group.config_json) : {};
+                
+                // 清空当前任务
+                tasks = {};
+                activeSubTask = {};
+                
+                // 解析配置
+                const models = config.models || [];
+                const testCases = config.test_cases || [];
+                const totalRounds = group.total_rounds || 10;
+                
+                // 创建任务卡片
+                models.forEach(m => {
+                    testCases.forEach(c => {
+                        createTask(m, c, totalRounds);
+                    });
+                });
+                
+                // 获取该组的所有结果来填充状态
+                const resultsRes = await fetch(`/api/history/${groupId}/results`);
+                const resultsData = await resultsRes.json();
+                
+                if (resultsData.success && resultsData.data) {
+                    // 按模型和测试用例分组
+                    const resultsByTask = {};
+                    resultsData.data.forEach(r => {
+                        const taskId = getTaskId(r.model_name, r.test_case_name);
+                        if (!resultsByTask[taskId]) {
+                            resultsByTask[taskId] = [];
+                        }
+                        resultsByTask[taskId].push(r);
+                    });
+                    
+                    // 更新每个任务的状态
+                    for (const [taskId, results] of Object.entries(resultsByTask)) {
+                        if (!tasks[taskId]) continue;
+                        
+                        results.forEach(r => {
+                            const subId = getSubTaskId(r.model_name, r.test_case_name, r.round_number);
+                            if (tasks[taskId].sub_tasks[subId]) {
+                                tasks[taskId].sub_tasks[subId].status = r.success ? 'done' : 'error';
+                                tasks[taskId].sub_tasks[subId].output = r.output_text || r.response_preview || '';
+                                tasks[taskId].sub_tasks[subId].metrics = {
+                                    ttft: r.ttft_seconds?.toFixed(3) || '--',
+                                    tpft: r.tpft_seconds?.toFixed(3) || '--',
+                                    tokens: r.output_tokens || '--',
+                                    speed: r.tokens_per_second?.toFixed(1) || '--'
+                                };
+                            }
+                        });
+                        
+                        // 更新任务总体状态
+                        const subTasks = tasks[taskId].sub_tasks;
+                        const allDone = Object.values(subTasks).every(t => t.status === 'done' || t.status === 'error');
+                        if (allDone) {
+                            tasks[taskId].status = 'done';
+                        }
+                        
+                        // 更新进度
+                        const doneCount = Object.values(subTasks).filter(t => t.status === 'done').length;
+                        tasks[taskId].current_round = doneCount;
+                        tasks[taskId].progress = Math.round((doneCount / totalRounds) * 100);
+                    }
+                }
+                
+                renderTaskCards();
+                
+                // 更新状态显示
+                document.getElementById('testStatus').textContent = group.status === 'completed' ? 'DONE' : group.status.toUpperCase();
+                hideHistoryModal();
+                
+                addLog(new Date().toLocaleTimeString(), 'LOAD', `已加载任务组: ${group.name || groupId}`);
+                showToast('已加载历史任务组', 'success');
+                
+            } catch(e) {
+                showToast('加载失败: ' + e.message, 'error');
+            }
+        }
+
+        // 显示编辑任务组弹窗
+        async function showEditGroupModal(groupId) {
+            try {
+                const res = await fetch(`/api/history/${groupId}`);
+                const data = await res.json();
+                
+                if (!data.success) {
+                    showToast('加载失败: ' + data.error, 'error');
+                    return;
+                }
+                
+                const group = data.data.group;
+                
+                // 创建编辑弹窗
+                const modalHtml = `
+                    <div class="modal-overlay show" id="editGroupModal">
+                        <div class="modal">
+                            <div class="modal-title">编辑测试组</div>
+                            <div class="form-group">
+                                <label class="form-label">名称</label>
+                                <input type="text" class="form-input" id="editGroupName" value="${group.name || ''}">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">状态</label>
+                                <select class="form-input" id="editGroupStatus" style="padding: 10px;">
+                                    <option value="running" ${group.status === 'running' ? 'selected' : ''}>运行中</option>
+                                    <option value="completed" ${group.status === 'completed' ? 'selected' : ''}>已完成</option>
+                                    <option value="stopped" ${group.status === 'stopped' ? 'selected' : ''}>已停止</option>
+                                </select>
+                            </div>
+                            <div class="form-actions">
+                                <button class="btn btn-secondary" onclick="closeEditGroupModal()">取消</button>
+                                <button class="btn btn-primary" onclick="saveEditGroup('${groupId}')">保存</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                // 添加弹窗到页面
+                document.body.insertAdjacentHTML('beforeend', modalHtml);
+                
+            } catch(e) {
+                showToast('加载失败: ' + e.message, 'error');
+            }
+        }
+
+        function closeEditGroupModal() {
+            const modal = document.getElementById('editGroupModal');
+            if (modal) modal.remove();
+        }
+
+        async function saveEditGroup(groupId) {
+            const name = document.getElementById('editGroupName').value;
+            const status = document.getElementById('editGroupStatus').value;
+            
+            try {
+                const res = await fetch(`/api/history/${groupId}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ name, status })
+                });
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    showToast('保存成功', 'success');
+                    closeEditGroupModal();
+                    await loadHistory();
+                } else {
+                    showToast('保存失败: ' + data.error, 'error');
+                }
+            } catch(e) {
+                showToast('保存失败: ' + e.message, 'error');
+            }
+        }
+
+        async function viewHistoryDetail(groupId) {
+            // 直接加载到当前界面
+            await loadHistoryGroup(groupId);
+        }
+
+        async function deleteHistory(groupId) {
+            if (!confirm('确定删除此测试记录吗？')) return;
+            
+            try {
+                const res = await fetch(`/api/history/${groupId}`, {method: 'DELETE'});
+                const data = await res.json();
+                
+                if (data.success) {
+                    showToast('删除成功', 'success');
+                    await loadHistory();
+                } else {
+                    showToast('删除失败: ' + data.error, 'error');
+                }
+            } catch(e) {
+                showToast('删除失败: ' + e.message, 'error');
+            }
+        }
+
+        // ===== Popover 功能 =====
+        let currentPopover = null;
+        
+        // 显示轮次 Popover
+        function showRoundPopover(el, event) {
+            // 移除已存在的 popover
+            hideRoundPopover();
+            
+            const taskId = el.dataset.taskId;
+            const idx = parseInt(el.dataset.idx);
+            const output = el.dataset.output;
+            const status = el.dataset.status;
+            const name = el.dataset.name;
+            const metrics = el.dataset.metrics;
+            
+            // 创建 popover 元素
+            const popover = document.createElement('div');
+            popover.className = 'round-popover' + (status === 'running' ? ' streaming' : '');
+            
+            // 使用鼠标位置或元素位置
+            let left, top;
+            if (event && event.clientX && event.clientY) {
+                // 鼠标位置
+                left = event.clientX;
+                top = event.clientY;
+            } else {
+                // 获取圆环按钮的位置作为后备
+                const rect = el.getBoundingClientRect();
+                left = rect.left + rect.width / 2;
+                top = rect.top;
+            }
+            
+            // 构建 popover 内容
+            let content = '';
+            
+            // 标题
+            content += `<div class="round-popover-header">${name}`;
+            if (status === 'running') {
+                content += ' <span style="animation: blink 1s infinite;">▌</span>';
+            } else if (status === 'done') {
+                content += ' ✓';
+            } else if (status === 'error') {
+                content += ' ✗';
+            }
+            content += '</div>';
+            
+            // 指标信息
+            if (metrics) {
+                content += `<div style="font-size: 0.6rem; color: var(--accent-cyan); margin-bottom: 6px;">${metrics}</div>`;
+            }
+            
+            // 输出内容
+            if (status === 'pending') {
+                content += '<div class="round-popover-loading"><div class="loading-spinner"></div>等待中...</div>';
+            } else if (output && output !== '无输出') {
+                content += `<div class="round-popover-content">${escapeHtml(output)}</div>`;
+            } else {
+                content += '<div style="color: var(--gray-500)">无输出</div>';
+            }
+            
+            popover.innerHTML = content;
+            
+            // 设置位置（使用 fixed 定位，基于视口）
+            // 初始位置：鼠标位置偏移
+            popover.style.position = 'fixed';
+            popover.style.left = (left - 150) + 'px'; // 居中偏移
+            popover.style.top = (top + 15) + 'px'; // 鼠标下方一点
+            
+            // 添加到 DOM 获取尺寸
+            document.body.appendChild(popover);
+            
+            // 调整位置确保不超出视口
+            const popoverRect = popover.getBoundingClientRect();
+            let finalLeft = left - 150;
+            let finalTop = top + 15;
+            
+            // 确保不超出右边界
+            if (finalLeft + popoverRect.width > window.innerWidth - 10) {
+                finalLeft = window.innerWidth - popoverRect.width - 10;
+            }
+            // 确保不超出左边界
+            if (finalLeft < 10) {
+                finalLeft = 10;
+            }
+            // 确保不超出下边界，如果是则显示在鼠标上方
+            if (finalTop + popoverRect.height > window.innerHeight - 10) {
+                finalTop = top - popoverRect.height - 10;
+            }
+            // 确保不超出上边界
+            if (finalTop < 10) {
+                finalTop = 10;
+            }
+            
+            popover.style.left = finalLeft + 'px';
+            popover.style.top = finalTop + 'px';
+            
+            popover.classList.add('visible');
+            currentPopover = popover;
+        }
+        
+        // 隐藏轮次 Popover
+        function hideRoundPopover() {
+            if (currentPopover) {
+                currentPopover.remove();
+                currentPopover = null;
+            }
+        }
+        
+        // 监听流式输出的实时更新
+        let streamingUpdateInterval = null;
+        
+        // 启动流式输出更新监听
+        function startStreamingListener() {
+            if (streamingUpdateInterval) return;
+            
+            streamingUpdateInterval = setInterval(() => {
+                // 更新所有 running 状态的 popover
+                const popover = document.querySelector('.round-popover.streaming');
+                if (!popover) return;
+                
+                const header = popover.querySelector('.round-popover-header');
+                if (!header) return;
+                
+                const name = header.textContent.replace(/ ▌$/, '').replace(/ ✓$/, '').replace(/ ✗$/, '');
+                
+                // 找到对应的任务和轮次
+                for (const [taskId, task] of Object.entries(tasks)) {
+                    for (const [subId, subTask] of Object.entries(task.sub_tasks)) {
+                        if (subTask.name === name && subTask.status === 'running') {
+                            const output = subTask.output ? subTask.output.substring(0, 500) : '';
+                            const contentEl = popover.querySelector('.round-popover-content');
+                            if (contentEl && output) {
+                                contentEl.textContent = output;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }, 500); // 每 500ms 更新一次
+        }
+        
+        // 停止流式输出更新监听
+        function stopStreamingListener() {
+            if (streamingUpdateInterval) {
+                clearInterval(streamingUpdateInterval);
+                streamingUpdateInterval = null;
+            }
+        }
+        
+        // 页面加载时启动流式监听
+        startStreamingListener();
+    </script>
+</body>
+</html>
