@@ -120,6 +120,28 @@ class ModelTester:
         # 确定显示用的prompt
         display_prompt = prompt or (messages[-1]["content"] if messages else "")
         
+        # 输出详细信息标题
+        print(f"\n{'='*60}")
+        print(f"【流式测试】模型: {self.client.name}")
+        print(f"{'='*60}")
+        
+        # 输出 Input
+        print(f"\n📥 【INPUT 输入】:")
+        print(f"-" * 40)
+        if messages:
+            # 如果有消息数组，显示完整对话
+            for i, msg in enumerate(messages):
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                print(f"[{role}]: {content[:200]}{'...' if len(content) > 200 else ''}")
+            if system_prompt:
+                print(f"[system]: {system_prompt[:200]}{'...' if len(system_prompt) > 200 else ''}")
+        else:
+            print(f"{display_prompt[:500]}{'...' if len(display_prompt) > 500 else ''}")
+        print(f"-" * 40)
+        
+        print(f"\n🔄 正在等待响应...")
+        
         try:
             async for chunk in self.client.chat_stream(
                 prompt=prompt,
@@ -143,6 +165,7 @@ class ModelTester:
             # 记录完整错误信息用于调试
             import traceback
             error_details = traceback.format_exc()
+            print(f"\n❌ 【测试失败】: Stream error ({error_type}): {error_msg}")
             return TestResult(
                 success=False,
                 model_name=self.client.name,
@@ -158,6 +181,7 @@ class ModelTester:
         
         # 检查模型是否返回了有效输出
         if not full_content:
+            print(f"\n❌ 【测试失败】: 模型返回空输出（output_tokens: 0）")
             return TestResult(
                 success=False,
                 model_name=self.client.name,
@@ -182,6 +206,32 @@ class ModelTester:
             metadata={"test_type": "stream", "messages_count": len(messages) if messages else 0}
         )
         
+        # 输出 Output
+        print(f"\n📤 【OUTPUT 输出】:")
+        print(f"-" * 40)
+        # 截断显示，过长时显示部分
+        output_display = full_content[:1000] if len(full_content) > 1000 else full_content
+        print(output_display)
+        if len(full_content) > 1000:
+            print(f"... [输出过长，已截断，总长度: {len(full_content)} 字符]")
+        print(f"-" * 40)
+        
+        # 输出性能指标
+        print(f"\n📊 【性能指标】:")
+        print(f"  - 输入Token数: {metrics.input_tokens}")
+        print(f"  - 输出Token数: {metrics.output_tokens}")
+        print(f"  - 首Token时间(TTFT): {metrics.ttft:.3f}s")
+        print(f"  - 生成时间(TPFT): {metrics.tpft:.3f}s")
+        print(f"  - 总耗时: {metrics.total_time:.3f}s")
+        print(f"  - 输出速度: {metrics.tokens_per_second:.2f} tokens/s")
+        if metrics.think_time > 0:
+            print(f"  - Think时间: {metrics.think_time:.3f}s")
+            print(f"  - Think Tokens: {metrics.think_tokens}")
+        if metrics.answer_time > 0:
+            print(f"  - Answer时间: {metrics.answer_time:.3f}s")
+            print(f"  - Answer Tokens: {metrics.answer_tokens}")
+        print(f"\n✅ 【测试成功】")
+        
         return TestResult(
             success=True,
             model_name=self.client.name,
@@ -204,6 +254,28 @@ class ModelTester:
         # 确定显示用的prompt
         display_prompt = prompt or (messages[-1]["content"] if messages else "")
         
+        # 输出详细信息标题
+        print(f"\n{'='*60}")
+        print(f"【非流式测试】模型: {self.client.name}")
+        print(f"{'='*60}")
+        
+        # 输出 Input
+        print(f"\n📥 【INPUT 输入】:")
+        print(f"-" * 40)
+        if messages:
+            # 如果有消息数组，显示完整对话
+            for i, msg in enumerate(messages):
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                print(f"[{role}]: {content[:200]}{'...' if len(content) > 200 else ''}")
+            if system_prompt:
+                print(f"[system]: {system_prompt[:200]}{'...' if len(system_prompt) > 200 else ''}")
+        else:
+            print(f"{display_prompt[:500]}{'...' if len(display_prompt) > 500 else ''}")
+        print(f"-" * 40)
+        
+        print(f"\n🔄 正在等待响应...")
+        
         try:
             result = await self.client.chat(
                 prompt=prompt,
@@ -216,6 +288,7 @@ class ModelTester:
         except Exception as e:
             error_type = type(e).__name__
             error_msg = str(e) or "Unknown error"
+            print(f"\n❌ 【测试失败】: Non-stream error ({error_type}): {error_msg}")
             return TestResult(
                 success=False,
                 model_name=self.client.name,
@@ -231,6 +304,7 @@ class ModelTester:
         output_tokens = result.get("output_tokens", 0)
         
         if not content or output_tokens == 0:
+            print(f"\n❌ 【测试失败】: 模型返回空输出（output_tokens: 0）")
             return TestResult(
                 success=False,
                 model_name=self.client.name,
@@ -255,6 +329,24 @@ class ModelTester:
             metrics=metrics.to_dict(),
             metadata={"test_type": "non-stream", "messages_count": len(messages) if messages else 0}
         )
+        
+        # 输出 Output
+        print(f"\n📤 【OUTPUT 输出】:")
+        print(f"-" * 40)
+        # 截断显示，过长时显示部分
+        output_display = content[:1000] if len(content) > 1000 else content
+        print(output_display)
+        if len(content) > 1000:
+            print(f"... [输出过长，已截断，总长度: {len(content)} 字符]")
+        print(f"-" * 40)
+        
+        # 输出性能指标
+        print(f"\n📊 【性能指标】:")
+        print(f"  - 输入Token数: {metrics.input_tokens}")
+        print(f"  - 输出Token数: {metrics.output_tokens}")
+        print(f"  - 总耗时: {metrics.total_time:.3f}s")
+        print(f"  - 输出速度: {metrics.tokens_per_second:.2f} tokens/s")
+        print(f"\n✅ 【测试成功】")
         
         return TestResult(
             success=True,

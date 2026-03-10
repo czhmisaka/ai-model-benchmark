@@ -116,10 +116,14 @@
           v-for="(task, taskId) in tasks" 
           :key="taskId"
           class="task-card"
-          :class="task.status"
+          :class="[task.status, { dragging: cardDragState.isDragging && cardDragState.draggingCardId === taskId }]"
           :id="`card-${taskId}`"
+          :style="getCardStyle(taskId)"
           @click="openTaskDetail(taskId)"
+          @mousedown="startCardDrag($event, taskId)"
         >
+          <!-- 卡片尺寸调整手柄 -->
+          <div class="card-resize-handle" @mousedown.stop="startCardResize($event, taskId)"></div>
           <div class="task-header">
             <div class="task-info">
               <div class="task-model">{{ task.model_name }}</div>
@@ -217,9 +221,18 @@
     <!-- 浮动日志面板 -->
     <div 
       class="log-panel" 
-      :class="{ minimized: logMinimized }"
+      :class="{ minimized: logMinimized, resizing: isLogResizingAny, 'drag-over': isLogPanelDragging }"
       :style="logPanelStyle"
     >
+      <!-- 顶部调整大小手柄 -->
+      <div class="log-resize-handle log-resize-handle-top" @mousedown.stop="startLogResizeTop"></div>
+      <!-- 底部调整大小手柄 -->
+      <div class="log-resize-handle log-resize-handle-bottom" @mousedown.stop="startLogResizeBottom"></div>
+      <!-- 左侧调整大小手柄 -->
+      <div class="log-resize-handle log-resize-handle-left" @mousedown.stop="startLogResizeLeft"></div>
+      <!-- 右侧调整大小手柄 -->
+      <div class="log-resize-handle log-resize-handle-right" @mousedown.stop="startLogResizeRight"></div>
+      
       <!-- 面板拖拽头部 -->
       <div class="log-panel-header" @mousedown="startLogPanelDrag">
         <div class="log-header-left">
@@ -290,10 +303,8 @@
           </button>
         </div>
       </div>
-      <!-- 调整大小手柄 -->
-      <div class="log-resize-handle" @mousedown="startLogResize"></div>
       <!-- 日志内容区域 -->
-      <div 
+      <div
         class="log-area" 
         id="logArea" 
         ref="logAreaRef"
@@ -504,9 +515,18 @@
                     <span class="metric-value">{{ subTask.metrics.answerTime }}s</span>
                   </div>
                 </div>
-                <div class="detail-round-output" v-if="subTask.output && subTask.status === 'done'">
-                  <div class="output-label">输出预览:</div>
-                  <div class="output-content">{{ trimText(subTask.output.substring(0, 500)) }}</div>
+                <!-- 输入/输出显示 -->
+                <div class="detail-round-io" v-if="subTask.status === 'done' || subTask.status === 'running'">
+                  <!-- 输入显示 -->
+                  <div class="io-section" v-if="subTask.prompt">
+                    <div class="io-label">输入 Prompt:</div>
+                    <div class="io-content input">{{ trimText(subTask.prompt.substring(0, 300)) }}</div>
+                  </div>
+                  <!-- 输出显示 -->
+                  <div class="io-section" v-if="subTask.output">
+                    <div class="io-label">输出预览:</div>
+                    <div class="io-content output">{{ trimText(subTask.output.substring(0, 500)) }}</div>
+                  </div>
                 </div>
                 <div class="detail-round-error" v-if="subTask.status === 'error'">
                   错误: {{ subTask.error || '未知错误' }}
@@ -710,6 +730,40 @@ const sseStatus = ref('--')
 const testRunning = ref(false)
 const testStatus = ref('IDLE')
 
+// 任务卡片拖拽排序状态
+const cardDragState = reactive({
+  isDragging: false,
+  draggingCardId: null as string | null,
+  startX: 0,
+  startY: 0,
+  currentX: 0,
+  currentY: 0,
+  startIndex: -1,
+  currentIndex: -1,
+  placeholderIndex: -1
+})
+
+// 任务卡片尺寸状态
+const cardResizeState = reactive({
+  isResizing: false,
+  resizingCardId: null as string | null,
+  direction: '' as string,
+  startX: 0,
+  startY: 0,
+  startWidth: 0,
+  startHeight: 0
+})
+
+// 任务卡片位置和尺寸（持久化）
+const cardPositions = ref<Record<string, { order: number, width: number, height: number }>>({})
+
+// 任务卡片排序列表
+const taskOrder = ref<string[]>([])
+const MIN_CARD_WIDTH = 280
+const MAX_CARD_WIDTH = 600
+const MIN_CARD_HEIGHT = 180
+const MAX_CARD_HEIGHT = 500
+
 // 侧边栏宽度控制
 const sidebarWidth = ref(400)
 const isDragging = ref(false)
@@ -722,7 +776,7 @@ const AUTO_COLLAPSE_WIDTH = 300  // 窗口宽度小于此值时自动折叠
 // 浮动日志面板控制
 const logMinimized = ref(false)
 const logPanelX = ref(20)
-const logPanelY = ref(0)
+const logPanelY = ref(window.innerHeight - 220)  // 默认距离底部220px
 const logPanelWidth = ref(600)
 const logPanelHeight = ref(200)
 const isLogPanelDragging = ref(false)
@@ -730,15 +784,23 @@ const isLogResizing = ref(false)
 const MIN_LOG_PANEL_WIDTH = 300
 const MIN_LOG_PANEL_HEIGHT = 100
 const MAX_LOG_PANEL_HEIGHT = 800
+const MAX_LOG_PANEL_WIDTH = 1200
+const MIN_LOG_PANEL_Y = 40  // 最小距离顶部的距离
+const MAX_LOG_PANEL_Y = window.innerHeight - 100  // 最大距离顶部的距离
+
+// 计算属性：是否正在调整大小（任意方向）
+const isLogResizingAny = computed(() => isLogResizing.value)
 
 // 计算日志面板样式
 const logPanelStyle = computed(() => ({
   position: 'fixed',
   left: logPanelX.value + 'px',
-  bottom: logPanelY.value + 'px',
+  top: logPanelY.value + 'px',  // 使用 top 属性，使拖拽方向正确
   width: logPanelWidth.value + 'px',
   height: logMinimized.value ? 'auto' : logPanelHeight.value + 'px',
-  zIndex: 50
+  zIndex: 50,
+  boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
+  borderRadius: logMinimized.value ? '50%' : '12px'
 }))
 
 // 排序
@@ -750,6 +812,8 @@ interface SubTask {
   output: string
   status: string
   metrics: any
+  prompt?: string
+  error?: string
 }
 
 interface Task {
@@ -1127,15 +1191,21 @@ function toggleSidebar() {
   }
 }
 
-// 浮动日志面板拖拽
+// 浮动日志面板拖拽 - 优化版本，使用 transform 提升性能
 let logPanelDragStartX = 0
 let logPanelDragStartY = 0
 let logPanelStartX = 0
 let logPanelStartY = 0
+let logPanelDraggingEl: HTMLElement | null = null
+let logPanelDragOffsetX = 0
+let logPanelDragOffsetY = 0
 
 function startLogPanelDrag(e: MouseEvent) {
   // 不允许拖拽带有输入焦点的元素
   if ((e.target as HTMLElement).tagName === 'INPUT') return
+  
+  const panel = document.querySelector('.log-panel') as HTMLElement
+  if (!panel) return
   
   isLogPanelDragging.value = true
   logPanelDragStartX = e.clientX
@@ -1143,24 +1213,43 @@ function startLogPanelDrag(e: MouseEvent) {
   logPanelStartX = logPanelX.value
   logPanelStartY = logPanelY.value
   
-  document.addEventListener('mousemove', onLogPanelDrag)
-  document.addEventListener('mouseup', stopLogPanelDrag)
+  // 使用 transform 提升性能
+  panel.style.transition = 'none'
+  panel.style.zIndex = '1000'
+  
+  // 添加全局事件监听
+  document.addEventListener('mousemove', onLogPanelDrag, { passive: false })
+  document.addEventListener('mouseup', stopLogPanelDrag, { passive: true })
   e.preventDefault()
 }
 
 function onLogPanelDrag(e: MouseEvent) {
   if (!isLogPanelDragging.value) return
   
-  const deltaX = e.clientX - logPanelDragStartX
-  const deltaY = e.clientY - logPanelDragStartY
-  
-  // 更新面板位置
-  logPanelX.value = Math.max(0, Math.min(window.innerWidth - logPanelWidth.value - 20, logPanelStartX + deltaX))
-  logPanelY.value = Math.max(0, Math.min(window.innerHeight - 100, logPanelStartY + deltaY))
+  // 使用 requestAnimationFrame 优化性能
+  requestAnimationFrame(() => {
+    const deltaX = e.clientX - logPanelDragStartX
+    const deltaY = e.clientY - logPanelDragStartY
+    
+    // 更新面板位置 - 使用 top 属性，方向正确
+    const newX = Math.max(0, Math.min(window.innerWidth - logPanelWidth.value - 20, logPanelStartX + deltaX))
+    const newY = Math.max(MIN_LOG_PANEL_Y, Math.min(MAX_LOG_PANEL_Y, logPanelStartY + deltaY))
+    
+    logPanelX.value = newX
+    logPanelY.value = newY
+  })
 }
 
 function stopLogPanelDrag() {
   isLogPanelDragging.value = false
+  
+  // 恢复面板样式
+  const panel = document.querySelector('.log-panel') as HTMLElement
+  if (panel) {
+    panel.style.transition = ''
+    panel.style.zIndex = '50'
+  }
+  
   document.removeEventListener('mousemove', onLogPanelDrag)
   document.removeEventListener('mouseup', stopLogPanelDrag)
 }
@@ -1192,6 +1281,233 @@ function stopLogResize() {
   isLogResizing.value = false
   document.removeEventListener('mousemove', onLogResize)
   document.removeEventListener('mouseup', stopLogResize)
+}
+
+// 顶部 resize
+let logResizeTopStartY = 0
+let logResizeTopStartHeight = 0
+
+function startLogResizeTop(e: MouseEvent) {
+  isLogResizing.value = true
+  logResizeTopStartY = e.clientY
+  logResizeTopStartHeight = logPanelHeight.value
+  
+  document.addEventListener('mousemove', onLogResizeTop)
+  document.addEventListener('mouseup', stopLogResizeTop)
+  e.preventDefault()
+}
+
+function onLogResizeTop(e: MouseEvent) {
+  if (!isLogResizing.value) return
+  
+  const deltaY = logResizeTopStartY - e.clientY  // 反向：向上拖动时 deltaY 为正
+  const newHeight = Math.max(MIN_LOG_PANEL_HEIGHT, Math.min(MAX_LOG_PANEL_HEIGHT, logResizeTopStartHeight + deltaY))
+  
+  logPanelHeight.value = newHeight
+}
+
+function stopLogResizeTop() {
+  isLogResizing.value = false
+  document.removeEventListener('mousemove', onLogResizeTop)
+  document.removeEventListener('mouseup', stopLogResizeTop)
+}
+
+// 底部 resize
+let logResizeBottomStartY = 0
+let logResizeBottomStartHeight = 0
+
+function startLogResizeBottom(e: MouseEvent) {
+  isLogResizing.value = true
+  logResizeBottomStartY = e.clientY
+  logResizeBottomStartHeight = logPanelHeight.value
+  
+  document.addEventListener('mousemove', onLogResizeBottom)
+  document.addEventListener('mouseup', stopLogResizeBottom)
+  e.preventDefault()
+}
+
+function onLogResizeBottom(e: MouseEvent) {
+  if (!isLogResizing.value) return
+  
+  const deltaY = e.clientY - logResizeBottomStartY
+  const newHeight = Math.max(MIN_LOG_PANEL_HEIGHT, Math.min(MAX_LOG_PANEL_HEIGHT, logResizeBottomStartHeight + deltaY))
+  
+  logPanelHeight.value = newHeight
+}
+
+function stopLogResizeBottom() {
+  isLogResizing.value = false
+  document.removeEventListener('mousemove', onLogResizeBottom)
+  document.removeEventListener('mouseup', stopLogResizeBottom)
+}
+
+// 左侧 resize
+let logResizeLeftStartX = 0
+let logResizeLeftStartWidth = 0
+
+function startLogResizeLeft(e: MouseEvent) {
+  isLogResizing.value = true
+  logResizeLeftStartX = e.clientX
+  logResizeLeftStartWidth = logPanelWidth.value
+  
+  document.addEventListener('mousemove', onLogResizeLeft)
+  document.addEventListener('mouseup', stopLogResizeLeft)
+  e.preventDefault()
+}
+
+function onLogResizeLeft(e: MouseEvent) {
+  if (!isLogResizing.value) return
+  
+  const deltaX = logResizeLeftStartX - e.clientX  // 向左拖动时 deltaX 为正
+  const newWidth = Math.max(MIN_LOG_PANEL_WIDTH, Math.min(MAX_LOG_PANEL_WIDTH, logResizeLeftStartWidth + deltaX))
+  
+  logPanelWidth.value = newWidth
+}
+
+function stopLogResizeLeft() {
+  isLogResizing.value = false
+  document.removeEventListener('mousemove', onLogResizeLeft)
+  document.removeEventListener('mouseup', stopLogResizeLeft)
+}
+
+// 右侧 resize
+let logResizeRightStartX = 0
+let logResizeRightStartWidth = 0
+
+function startLogResizeRight(e: MouseEvent) {
+  isLogResizing.value = true
+  logResizeRightStartX = e.clientX
+  logResizeRightStartWidth = logPanelWidth.value
+  
+  document.addEventListener('mousemove', onLogResizeRight)
+  document.addEventListener('mouseup', stopLogResizeRight)
+  e.preventDefault()
+}
+
+function onLogResizeRight(e: MouseEvent) {
+  if (!isLogResizing.value) return
+  
+  const deltaX = e.clientX - logResizeRightStartX
+  const newWidth = Math.max(MIN_LOG_PANEL_WIDTH, Math.min(MAX_LOG_PANEL_WIDTH, logResizeRightStartWidth + deltaX))
+  
+  logPanelWidth.value = newWidth
+}
+
+function stopLogResizeRight() {
+  isLogResizing.value = false
+  document.removeEventListener('mousemove', onLogResizeRight)
+  document.removeEventListener('mouseup', stopLogResizeRight)
+}
+
+// 左上角 resize
+let logResizeTopLeftStartX = 0
+let logResizeTopLeftStartY = 0
+let logResizeTopLeftStartWidth = 0
+let logResizeTopLeftStartHeight = 0
+
+function startLogResizeTopLeft(e: MouseEvent) {
+  isLogResizing.value = true
+  logResizeTopLeftStartX = e.clientX
+  logResizeTopLeftStartY = e.clientY
+  logResizeTopLeftStartWidth = logPanelWidth.value
+  logResizeTopLeftStartHeight = logPanelHeight.value
+  
+  document.addEventListener('mousemove', onLogResizeTopLeft)
+  document.addEventListener('mouseup', stopLogResizeTopLeft)
+  e.preventDefault()
+}
+
+function onLogResizeTopLeft(e: MouseEvent) {
+  if (!isLogResizing.value) return
+  
+  const deltaX = logResizeTopLeftStartX - e.clientX
+  const deltaY = logResizeTopLeftStartY - e.clientY
+  
+  const newWidth = Math.max(MIN_LOG_PANEL_WIDTH, Math.min(MAX_LOG_PANEL_WIDTH, logResizeTopLeftStartWidth + deltaX))
+  const newHeight = Math.max(MIN_LOG_PANEL_HEIGHT, Math.min(MAX_LOG_PANEL_HEIGHT, logResizeTopLeftStartHeight + deltaY))
+  
+  logPanelWidth.value = newWidth
+  logPanelHeight.value = newHeight
+}
+
+function stopLogResizeTopLeft() {
+  isLogResizing.value = false
+  document.removeEventListener('mousemove', onLogResizeTopLeft)
+  document.removeEventListener('mouseup', stopLogResizeTopLeft)
+}
+
+// 右上角 resize
+let logResizeTopRightStartX = 0
+let logResizeTopRightStartY = 0
+let logResizeTopRightStartWidth = 0
+let logResizeTopRightStartHeight = 0
+
+function startLogResizeTopRight(e: MouseEvent) {
+  isLogResizing.value = true
+  logResizeTopRightStartX = e.clientX
+  logResizeTopRightStartY = e.clientY
+  logResizeTopRightStartWidth = logPanelWidth.value
+  logResizeTopRightStartHeight = logPanelHeight.value
+  
+  document.addEventListener('mousemove', onLogResizeTopRight)
+  document.addEventListener('mouseup', stopLogResizeTopRight)
+  e.preventDefault()
+}
+
+function onLogResizeTopRight(e: MouseEvent) {
+  if (!isLogResizing.value) return
+  
+  const deltaX = e.clientX - logResizeTopRightStartX
+  const deltaY = logResizeTopRightStartY - e.clientY
+  
+  const newWidth = Math.max(MIN_LOG_PANEL_WIDTH, Math.min(MAX_LOG_PANEL_WIDTH, logResizeTopRightStartWidth + deltaX))
+  const newHeight = Math.max(MIN_LOG_PANEL_HEIGHT, Math.min(MAX_LOG_PANEL_HEIGHT, logResizeTopRightStartHeight + deltaY))
+  
+  logPanelWidth.value = newWidth
+  logPanelHeight.value = newHeight
+}
+
+function stopLogResizeTopRight() {
+  isLogResizing.value = false
+  document.removeEventListener('mousemove', onLogResizeTopRight)
+  document.removeEventListener('mouseup', stopLogResizeTopRight)
+}
+
+// 左下角 resize
+let logResizeBottomLeftStartX = 0
+let logResizeBottomLeftStartY = 0
+let logResizeBottomLeftStartWidth = 0
+let logResizeBottomLeftStartHeight = 0
+
+function startLogResizeBottomLeft(e: MouseEvent) {
+  isLogResizing.value = true
+  logResizeBottomLeftStartX = e.clientX
+  logResizeBottomLeftStartY = e.clientY
+  logResizeBottomLeftStartWidth = logPanelWidth.value
+  logResizeBottomLeftStartHeight = logPanelHeight.value
+  
+  document.addEventListener('mousemove', onLogResizeBottomLeft)
+  document.addEventListener('mouseup', stopLogResizeBottomLeft)
+  e.preventDefault()
+}
+
+function onLogResizeBottomLeft(e: MouseEvent) {
+  if (!isLogResizing.value) return
+  
+  const deltaX = logResizeBottomLeftStartX - e.clientX
+  const deltaY = e.clientY - logResizeBottomLeftStartY
+  
+  const newWidth = Math.max(MIN_LOG_PANEL_WIDTH, Math.min(MAX_LOG_PANEL_WIDTH, logResizeBottomLeftStartWidth + deltaX))
+  const newHeight = Math.max(MIN_LOG_PANEL_HEIGHT, Math.min(MAX_LOG_PANEL_HEIGHT, logResizeBottomLeftStartHeight + deltaY))
+  
+  logPanelWidth.value = newWidth
+  logPanelHeight.value = newHeight
+}
+
+function stopLogResizeBottomLeft() {
+  isLogResizing.value = false
+  document.removeEventListener('mousemove', onLogResizeBottomLeft)
+  document.removeEventListener('mouseup', stopLogResizeBottomLeft)
 }
 
 // Model/Case 选择
@@ -1573,6 +1889,216 @@ function createTask(modelName: string, caseName: string, totalRounds: number = 1
   if (activeSubTask.value[taskId] === undefined) {
     activeSubTask.value[taskId] = Math.max(0, totalRounds - 1)
   }
+  
+  // 初始化卡片位置
+  initCardPosition(taskId)
+}
+
+// 初始化卡片位置
+function initCardPosition(taskId: string) {
+  if (!cardPositions.value[taskId]) {
+    const order = taskOrder.value.length
+    cardPositions.value[taskId] = {
+      order: order,
+      width: 320,
+      height: 180
+    }
+    taskOrder.value.push(taskId)
+  }
+}
+
+// 卡片拖拽排序 - 开始
+function startCardDrag(e: MouseEvent, taskId: string) {
+  // 如果点击的是按钮或操作区域，不触发拖拽
+  if ((e.target as HTMLElement).closest('.task-action-btn') || 
+      (e.target as HTMLElement).closest('.task-status')) {
+    return
+  }
+  
+  cardDragState.isDragging = true
+  cardDragState.draggingCardId = taskId
+  cardDragState.startX = e.clientX
+  cardDragState.startY = e.clientY
+  cardDragState.startIndex = taskOrder.value.indexOf(taskId)
+  cardDragState.currentIndex = cardDragState.startIndex
+  
+  document.addEventListener('mousemove', onCardDrag)
+  document.addEventListener('mouseup', stopCardDrag)
+  e.preventDefault()
+  e.stopPropagation()
+}
+
+// 卡片拖拽排序 - 移动
+function onCardDrag(e: MouseEvent) {
+  if (!cardDragState.isDragging || !cardDragState.draggingCardId) return
+  
+  const container = document.getElementById('taskCards')
+  if (!container) return
+  
+  const containerRect = container.getBoundingClientRect()
+  const cards = container.querySelectorAll('.task-card')
+  
+  // 计算当前拖拽位置
+  const deltaX = e.clientX - cardDragState.startX
+  const deltaY = e.clientY - cardDragState.startY
+  
+  // 找到当前拖拽卡片应该放置的位置
+  let newIndex = cardDragState.startIndex
+  
+  cards.forEach((card, index) => {
+    if (index === cardDragState.startIndex) return
+    
+    const rect = card.getBoundingClientRect()
+    const cardCenterX = rect.left + rect.width / 2
+    const cardCenterY = rect.top + rect.height / 2
+    
+    // 检查是否越过了其他卡片
+    if (cardDragState.startIndex < index) {
+      // 从左向右拖
+      if (deltaX > 0 && e.clientX > cardCenterX - 20) {
+        newIndex = index
+      } else if (deltaY > 0 && e.clientY > cardCenterY - 20) {
+        newIndex = index
+      }
+    } else {
+      // 从右向左拖
+      if (deltaX < 0 && e.clientX < cardCenterX + 20) {
+        newIndex = index
+      } else if (deltaY < 0 && e.clientY < cardCenterY + 20) {
+        newIndex = index
+      }
+    }
+  })
+  
+  // 更新排序
+  if (newIndex !== cardDragState.currentIndex) {
+    cardDragState.currentIndex = newIndex
+    reorderTasks(newIndex)
+  }
+}
+
+// 重新排序任务
+function reorderTasks(newIndex: number) {
+  const draggingId = cardDragState.draggingCardId
+  if (!draggingId) return
+  
+  const currentIndex = taskOrder.value.indexOf(draggingId)
+  if (currentIndex === -1 || currentIndex === newIndex) return
+  
+  // 从原位置移除
+  taskOrder.value.splice(currentIndex, 1)
+  // 插入到新位置
+  taskOrder.value.splice(newIndex, 0, draggingId)
+  
+  // 更新所有卡片的order
+  taskOrder.value.forEach((taskId, index) => {
+    if (cardPositions.value[taskId]) {
+      cardPositions.value[taskId].order = index
+    }
+  })
+}
+
+// 卡片拖拽排序 - 结束
+function stopCardDrag() {
+  // 保存排序到localStorage
+  saveCardPositions()
+  
+  cardDragState.isDragging = false
+  cardDragState.draggingCardId = null
+  cardDragState.startIndex = -1
+  cardDragState.currentIndex = -1
+  
+  document.removeEventListener('mousemove', onCardDrag)
+  document.removeEventListener('mouseup', stopCardDrag)
+}
+
+// 卡片尺寸调整 - 开始
+function startCardResize(e: MouseEvent, taskId: string) {
+  e.preventDefault()
+  e.stopPropagation()
+  
+  const cardEl = document.getElementById(`card-${taskId}`)
+  if (!cardEl) return
+  
+  const rect = cardEl.getBoundingClientRect()
+  
+  cardResizeState.isResizing = true
+  cardResizeState.resizingCardId = taskId
+  cardResizeState.startX = e.clientX
+  cardResizeState.startY = e.clientY
+  cardResizeState.startWidth = rect.width
+  cardResizeState.startHeight = rect.height
+  
+  document.addEventListener('mousemove', onCardResize)
+  document.addEventListener('mouseup', stopCardResize)
+}
+
+// 卡片尺寸调整 - 移动
+function onCardResize(e: MouseEvent) {
+  if (!cardResizeState.isResizing || !cardResizeState.resizingCardId) return
+  
+  const deltaX = e.clientX - cardResizeState.startX
+  const deltaY = e.clientY - cardResizeState.startY
+  
+  const newWidth = Math.max(MIN_CARD_WIDTH, Math.min(MAX_CARD_WIDTH, cardResizeState.startWidth + deltaX))
+  const newHeight = Math.max(MIN_CARD_HEIGHT, Math.min(MAX_CARD_HEIGHT, cardResizeState.startHeight + deltaY))
+  
+  if (cardPositions.value[cardResizeState.resizingCardId]) {
+    cardPositions.value[cardResizeState.resizingCardId].width = newWidth
+    cardPositions.value[cardResizeState.resizingCardId].height = newHeight
+  }
+}
+
+// 卡片尺寸调整 - 结束
+function stopCardResize() {
+  // 保存尺寸到localStorage
+  saveCardPositions()
+  
+  cardResizeState.isResizing = false
+  cardResizeState.resizingCardId = null
+  
+  document.removeEventListener('mousemove', onCardResize)
+  document.removeEventListener('mouseup', stopCardResize)
+}
+
+// 保存卡片位置和尺寸
+function saveCardPositions() {
+  localStorage.setItem('taskCardPositions', JSON.stringify(cardPositions.value))
+  localStorage.setItem('taskCardOrder', JSON.stringify(taskOrder.value))
+}
+
+// 加载卡片位置和尺寸
+function loadCardPositions() {
+  try {
+    const savedPositions = localStorage.getItem('taskCardPositions')
+    const savedOrder = localStorage.getItem('taskCardOrder')
+    
+    if (savedPositions) {
+      cardPositions.value = JSON.parse(savedPositions)
+    }
+    if (savedOrder) {
+      taskOrder.value = JSON.parse(savedOrder)
+    }
+  } catch (e) {
+    console.error('Failed to load card positions:', e)
+  }
+}
+
+// 获取卡片样式
+function getCardStyle(taskId: string): Record<string, string> {
+  const pos = cardPositions.value[taskId]
+  if (!pos) return {}
+  
+  const style: Record<string, string> = {}
+  
+  if (pos.width && pos.width !== 320) {
+    style.width = pos.width + 'px'
+  }
+  if (pos.height && pos.height !== 180) {
+    style.minHeight = pos.height + 'px'
+  }
+  
+  return style
 }
 
 // 卡片展开/折叠
@@ -2040,6 +2566,7 @@ function handleEvent(event: any) {
       break
       
     case 'complete':
+      console.log('[complete event] prompt:', data.prompt, 'response length:', data.response?.length)
       if (taskId && tasks.value[taskId] && subTaskId && tasks.value[taskId].sub_tasks[subTaskId]) {
         tasks.value[taskId].sub_tasks[subTaskId].status = data.success ? 'done' : 'error'
         tasks.value[taskId].sub_tasks[subTaskId].metrics = {
@@ -2053,6 +2580,16 @@ function handleEvent(event: any) {
           answerTokens: data.metrics?.answer_tokens || '--',
           thinkSpeed: data.metrics?.think_tokens_per_second?.toFixed(1) || '--',
           answerSpeed: data.metrics?.answer_tokens_per_second?.toFixed(1) || '--'
+        }
+        // 保存 prompt 和 response 用于详情显示
+        console.log('[complete] saving prompt:', data.prompt ? 'yes' : 'no', 'response:', data.response ? 'yes' : 'no')
+        if (data.prompt) {
+          tasks.value[taskId].sub_tasks[subTaskId].prompt = data.prompt
+          console.log('[complete] prompt saved:', data.prompt.substring(0, 50))
+        }
+        if (data.response) {
+          tasks.value[taskId].sub_tasks[subTaskId].output = data.response
+          console.log('[complete] response saved, length:', data.response.length)
         }
         
         const subTasks = tasks.value[taskId].sub_tasks
@@ -2240,6 +2777,9 @@ onMounted(async () => {
   if (savedCases) {
     JSON.parse(savedCases).forEach((c: string) => selectedCases.value.add(c))
   }
+  
+  // 加载卡片位置和尺寸
+  loadCardPositions()
   
   // 检查窗口宽度，如果小于等于自动折叠阈值则默认折叠
   if (window.innerWidth <= AUTO_COLLAPSE_WIDTH) {
@@ -3288,11 +3828,390 @@ onUnmounted(() => {
   }
 }
 
+/* 浮动日志面板 - 完整样式 */
+.log-panel {
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: 12px;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  transition: box-shadow 0.2s ease;
+  
+  /* 最小化/隐藏状态 - 显示为圆形小球 */
+  &.minimized {
+    width: 80px !important;
+    height: 80px !important;
+    min-height: 80px !important;
+    border-radius: 50% !important;
+    cursor: pointer;
+    
+    .log-panel-header {
+      padding: 20px;
+      justify-content: center;
+      min-height: 80px;
+    }
+    
+    .log-header-left, .log-header-right {
+      flex-direction: column;
+      gap: 4px;
+    }
+    
+    .log-header-right {
+      display: none;
+    }
+    
+    .log-area, .log-resize-handle {
+      display: none;
+    }
+    
+    /* 小球内显示进度 */
+    .log-panel-header::after {
+      content: '📋';
+      font-size: 24px;
+    }
+  }
+  
+  /* 拖拽时样式 */
+  &:active {
+    cursor: moving;
+  }
+  
+  /* 拖拽时的高亮效果 */
+  &.drag-over {
+    box-shadow: 0 8px 32px rgba(37, 99, 235, 0.25), 0 0 0 2px var(--primary);
+  }
+  
+  /* 调整大小时的高亮效果 */
+  &.resizing {
+    box-shadow: 0 8px 32px rgba(37, 99, 235, 0.25), 0 0 0 2px var(--primary);
+    cursor: nwse-resize;
+  }
+}
+
+/* 四边调整大小手柄 - 通用样式 */
+.log-resize-handle {
+  position: absolute;
+  z-index: 20;
+  background: transparent;
+  transition: background 0.15s ease;
+  
+  &:hover, &:active {
+    background: rgba(37, 99, 235, 0.15);
+  }
+}
+
+/* 顶部手柄 */
+.log-resize-handle-top {
+  top: -4px;
+  left: 12px;
+  right: 12px;
+  height: 8px;
+  cursor: n-resize;
+  border-radius: 4px 4px 0 0;
+  
+  &::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 40px;
+    height: 3px;
+    background: var(--gray-400);
+    border-radius: 2px;
+    transition: background 0.15s ease;
+  }
+  
+  &:hover::after, &:active::after {
+    background: var(--primary);
+  }
+}
+
+/* 底部手柄 */
+.log-resize-handle-bottom {
+  bottom: -4px;
+  left: 12px;
+  right: 12px;
+  height: 8px;
+  cursor: s-resize;
+  border-radius: 0 0 4px 4px;
+  
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 3px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 40px;
+    height: 3px;
+    background: var(--gray-400);
+    border-radius: 2px;
+    transition: background 0.15s ease;
+  }
+  
+  &:hover::after, &:active::after {
+    background: var(--primary);
+  }
+}
+
+/* 左侧手柄 */
+.log-resize-handle-left {
+  left: -6px;
+  top: 44px;
+  bottom: 40px;
+  width: 14px;
+  cursor: w-resize;
+  border-radius: 6px 0 0 6px;
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.15), transparent);
+  opacity: 0;
+  transition: all 0.2s ease;
+  
+  &:hover, &:active {
+    opacity: 1;
+    background: linear-gradient(90deg, rgba(59, 130, 246, 0.25), transparent);
+  }
+  
+  &::after {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 4px;
+    height: 40px;
+    background: var(--primary);
+    border-radius: 2px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    box-shadow: 0 0 8px rgba(37, 99, 235, 0.4);
+  }
+  
+  &:hover::after, &:active::after {
+    opacity: 1;
+  }
+}
+
+/* 右侧手柄 */
+.log-resize-handle-right {
+  right: -6px;
+  top: 44px;
+  bottom: 40px;
+  width: 14px;
+  cursor: e-resize;
+  border-radius: 0 6px 6px 0;
+  background: linear-gradient(-90deg, rgba(59, 130, 246, 0.15), transparent);
+  opacity: 0;
+  transition: all 0.2s ease;
+  
+  &:hover, &:active {
+    opacity: 1;
+    background: linear-gradient(-90deg, rgba(59, 130, 246, 0.25), transparent);
+  }
+  
+  &::after {
+    content: '';
+    position: absolute;
+    right: 5px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 4px;
+    height: 40px;
+    background: var(--primary);
+    border-radius: 2px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    box-shadow: 0 0 8px rgba(37, 99, 235, 0.4);
+  }
+  
+  &:hover::after, &:active::after {
+    opacity: 1;
+  }
+}
+
+/* 隐藏不需要的手柄样式 */
+.log-panel .log-resize-handle:not(.log-resize-handle-top):not(.log-resize-handle-bottom):not(.log-resize-handle-left):not(.log-resize-handle-right) {
+  position: relative;
+  height: 10px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--gray-100);
+  border-top: 1px solid var(--gray-200);
+  
+  &::after {
+    content: '⋮⋮';
+    font-size: 10px;
+    color: var(--gray-400);
+    letter-spacing: 2px;
+    transition: all 0.2s;
+    position: static;
+    width: auto;
+    height: auto;
+    background: transparent;
+    transform: none;
+    border: none;
+    border-radius: 0;
+  }
+  
+  &:hover::after, &:active::after {
+    color: var(--primary);
+  }
+}
+
+/* 日志面板头部 */
+.log-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: var(--gray-50);
+  border-bottom: 1px solid var(--gray-200);
+  min-height: 44px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  cursor: move;  /* 提示可拖拽 */
+  user-select: none;
+  
+  &:hover {
+    background: var(--gray-100);
+  }
+}
+
+.log-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.log-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.log-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--gray-800);
+}
+
+.log-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  color: var(--gray-500);
+}
+
+/* 搜索框 */
+.log-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  
+  input {
+    width: 120px;
+    padding: 4px 24px 4px 8px;
+    border: 1px solid var(--gray-300);
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    background: var(--white);
+    color: var(--gray-900);
+    transition: all 0.2s ease;
+    
+    &::placeholder {
+      color: var(--gray-400);
+    }
+    
+    &:focus {
+      outline: none;
+      border-color: var(--primary);
+      width: 160px;
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
+    }
+  }
+  
+  &.active input {
+    border-color: var(--primary);
+  }
+  
+  .log-search-clear {
+    position: absolute;
+    right: 6px;
+    cursor: pointer;
+    color: var(--gray-400);
+    font-size: 0.75rem;
+    padding: 2px;
+    
+    &:hover {
+      color: var(--gray-700);
+    }
+  }
+}
+
+/* 过滤按钮组 */
+.log-filter-group {
+  display: flex;
+  gap: 4px;
+}
+
+.log-filter-btn {
+  padding: 4px 8px;
+  border: 1px solid var(--gray-300);
+  border-radius: 4px;
+  background: var(--white);
+  color: var(--gray-600);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  
+  &:hover {
+    border-color: var(--gray-400);
+    color: var(--gray-700);
+  }
+  
+  &.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--white);
+  }
+}
+
+/* 操作按钮 */
+.log-action-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--gray-300);
+  border-radius: 4px;
+  background: var(--white);
+  color: var(--gray-600);
+  font-size: 0.7rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  
+  &:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: var(--gray-50);
+  }
+  
+  &.active {
+    background: var(--primary-dim);
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+}
+
 /* 底部日志 - 拖拽手柄 */
 .log-resize-handle {
-  grid-row: 3;
-  grid-column: 2;
-  height: 12px;
+  height: 10px;
   cursor: row-resize;
   z-index: 10;
   display: flex;
@@ -3300,12 +4219,11 @@ onUnmounted(() => {
   justify-content: center;
   background: var(--gray-100);
   border-top: 1px solid var(--gray-200);
-  border-bottom: 1px solid var(--gray-200);
   flex-shrink: 0;
   
   &::after {
     content: '⋮⋮';
-    font-size: 12px;
+    font-size: 10px;
     color: var(--gray-400);
     letter-spacing: 2px;
     transition: all 0.2s;
@@ -3772,6 +4690,52 @@ onUnmounted(() => {
   border-radius: 4px;
   font-size: 0.7rem;
   color: var(--accent-red);
+}
+
+/* 输入/输出显示区域 */
+.detail-round-io {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--gray-200);
+}
+
+.io-section {
+  margin-bottom: 8px;
+  
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.io-label {
+  font-size: 0.65rem;
+  color: var(--gray-500);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.io-content {
+  font-size: 0.7rem;
+  padding: 8px;
+  border-radius: 4px;
+  max-height: 100px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  
+  &.input {
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    color: var(--gray-700);
+  }
+  
+  &.output {
+    background: rgba(34, 197, 94, 0.08);
+    border: 1px solid rgba(34, 197, 94, 0.2);
+    color: var(--gray-700);
+  }
 }
 
 /* 历史记录模态框 - 浅色风格 */

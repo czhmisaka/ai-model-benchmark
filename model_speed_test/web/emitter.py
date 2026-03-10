@@ -408,7 +408,9 @@ class TestEventEmitter:
                 "metrics": metrics,
                 "success": success,
                 "current_round": current_round,
-                "total_rounds": total_rounds
+                "total_rounds": total_rounds,
+                "prompt": prompt or "",
+                "response": response or ""
             }
         ))
         
