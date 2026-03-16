@@ -385,6 +385,7 @@ class TestEventEmitter:
                 # 将 metrics 对象转换为字典
                 metrics_dict = metrics.to_dict() if hasattr(metrics, 'to_dict') else metrics
                 
+                # 不进行任何截断，使用完整输出
                 self._db.add_result(
                     group_id=group_id,
                     model_name=model_name,
@@ -393,7 +394,8 @@ class TestEventEmitter:
                     metrics=metrics_dict,
                     success=success,
                     prompt=prompt,
-                    response=output_text  # 使用完整输出
+                    response=output_text,
+                    output_text=output_text
                 )
                 print(f"[Emitter] 已保存测试结果: {group_id} - {model_name} - R{current_round}")
             except Exception as e:

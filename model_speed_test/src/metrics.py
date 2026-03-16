@@ -267,17 +267,19 @@ class MetricsCalculator:
             is_think = chunk.get("is_think", False)
             is_think_end = chunk.get("is_think_end", False)
             
-            # 检测 think 开始
-            if not in_think and '<think>' in content:
+            # 检测 think 开始 - 优先使用 is_think 标志（适用于 LMStudio 等使用 reasoning_content 的模型）
+            # 备用方案：检查 content 中的 '<think>' 标签（适用于 OpenAI 格式）
+            if not in_think and (is_think or '<think>' in content):
                 in_think = True
-                think_start_time = timestamp
+                if not think_start_time:
+                    think_start_time = timestamp
             
             if in_think:
                 think_contents.append(content)
             else:
                 answer_contents.append(content)
             
-            # 检测 think 结束
+            # 检测 think 结束 - 使用 is_think_end 标志
             if in_think and is_think_end:
                 in_think = False
                 think_end_time = timestamp

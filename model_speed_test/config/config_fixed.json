@@ -15,6 +15,13 @@
       "api_key": "sk-cp-xxx",
       "model": "MiniMax-Text-01",
       "enabled": false
+    },
+    {
+      "name": "Qwen3.5-9B (LM Studio)",
+      "endpoint": "http://localhost:1234/v1/chat/completions",
+      "api_key": "lm-studio",
+      "model": "qwen/qwen3.5-9b",
+      "enabled": true
     }
   ],
   "test_cases": [

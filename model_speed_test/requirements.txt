@@ -11,6 +11,9 @@ fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 jinja2>=3.1.0
 
+# API文档
+fastapi-utils>=5.0.0
+
 # 定时任务调度
 APScheduler>=3.10.0
 
