@@ -69,10 +69,15 @@ class ModelClient:
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """获取或创建HTTP会话"""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=self.timeout)
-            )
+        # 始终创建新 session 以避免连接复用导致的 HTTP/2 问题
+        # 禁用 SSL 证书验证（用于自签名证书或内部 CA）
+        if self._session and not self._session.closed:
+            await self._session.close()
+        
+        self._session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=self.timeout),
+            connector=aiohttp.TCPConnector(ssl=False, force_close=True)
+        )
         return self._session
     
     async def close(self):
@@ -107,7 +112,9 @@ class ModelClient:
             try:
                 session = await self._get_session()
                 
-                async with session.request(method, url, **kwargs) as response:
+                # 不使用 async with，避免 continue 时提前关闭 response
+                response = await session.request(method, url, **kwargs)
+                try:
                     # 如果是服务器错误 (5xx) 或限流 (429)，重试
                     if response.status >= 500 or response.status == 429:
                         if attempt < self.retry_config.max_retries:
@@ -118,10 +125,14 @@ class ModelClient:
                                 f"{delay:.1f}秒后重试..."
                             )
                             await asyncio.sleep(delay)
+                            response.close()
                             continue
                     
                     response.raise_for_status()
                     return response
+                except Exception:
+                    response.close()
+                    raise
                     
             except aiohttp.ClientError as e:
                 last_exception = e
@@ -154,7 +165,7 @@ class ModelClient:
         """构建请求头"""
         headers = {
             "Content-Type": "application/json",
-            "Accept": "text/event-stream"
+            "Accept": "application/json"
         }
         # 处理API Key
         api_key = os.path.expandvars(self.api_key)
@@ -320,7 +331,12 @@ class ModelClient:
         # 提取内容 - 兼容不同 API 格式
         content = ""
         if "choices" in result and len(result["choices"]) > 0:
-            content = result["choices"][0].get("message", {}).get("content", "")
+            message = result["choices"][0].get("message", {})
+            # 优先使用 content，如果为空则使用 reasoning（Qwen3.5 等模型的思考过程）
+            content = message.get("content", "")
+            if not content:
+                # Qwen3.5 等模型使用 reasoning 字段
+                content = message.get("reasoning", "")
         elif "response" in result:
             # LM Studio 格式
             content = result.get("response", "")
@@ -422,9 +438,9 @@ class ModelClient:
                                 continue
                             elif line.startswith('data:'):
                                 data = line[5:].strip()
+                                print(data)
                                 if data == '[DONE]':
                                     break
-                                
                                 try:
                                     chunk_json = json.loads(data)
                                     chunk_type = chunk_json.get("type", "")
@@ -483,7 +499,10 @@ class ModelClient:
                                 
                                 if choices:
                                     delta = choices[0].get("delta", {})
+                                    # 优先使用 content，如果为空则使用 reasoning（Qwen3.5 等模型的思考过程）
                                     content = delta.get("content", "")
+                                    if not content:
+                                        content = delta.get("reasoning", "")
                                     
                                     if content:
                                         is_first = not first_chunk_received

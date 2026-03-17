@@ -218,118 +218,8 @@
       </div>
     </div>
 
-    <!-- 浮动日志面板 -->
-    <div 
-      class="log-panel" 
-      :class="{ minimized: logMinimized, resizing: isLogResizingAny, 'drag-over': isLogPanelDragging }"
-      :style="logPanelStyle"
-    >
-      <!-- 顶部调整大小手柄 -->
-      <div class="log-resize-handle log-resize-handle-top" @mousedown.stop="startLogResizeTop"></div>
-      <!-- 底部调整大小手柄 -->
-      <div class="log-resize-handle log-resize-handle-bottom" @mousedown.stop="startLogResizeBottom"></div>
-      <!-- 左侧调整大小手柄 -->
-      <div class="log-resize-handle log-resize-handle-left" @mousedown.stop="startLogResizeLeft"></div>
-      <!-- 右侧调整大小手柄 -->
-      <div class="log-resize-handle log-resize-handle-right" @mousedown.stop="startLogResizeRight"></div>
-      
-      <!-- 面板拖拽头部 -->
-      <div class="log-panel-header" @mousedown="startLogPanelDrag">
-        <div class="log-header-left">
-          <span class="log-title">📋 日志</span>
-          <span class="log-count">({{ filteredLogs.length }} 条{{ filteredLogs.length !== logs.length ? ' / ' + logs.length + ' 全部' : '' }})</span>
-        </div>
-        <div class="log-header-right">
-          <!-- 搜索框 -->
-          <div class="log-search" :class="{ active: logSearchActive }">
-            <input 
-              type="text" 
-              v-model="logSearchText" 
-              placeholder="搜索日志..."
-              @focus="logSearchActive = true"
-              @blur="logSearchActive = false"
-            />
-            <span v-if="logSearchText" class="log-search-clear" @click="logSearchText = ''">×</span>
-          </div>
-          <!-- 过滤按钮 -->
-          <div class="log-filter-group">
-            <button 
-              class="log-filter-btn" 
-              :class="{ active: logFilter === 'all' }"
-              @click="logFilter = 'all'"
-              title="全部"
-            >全部</button>
-            <button 
-              class="log-filter-btn" 
-              :class="{ active: logFilter === 'error' }"
-              @click="logFilter = 'error'"
-              title="仅错误"
-            >错误</button>
-            <button 
-              class="log-filter-btn" 
-              :class="{ active: logFilter === 'running' }"
-              @click="logFilter = 'running'"
-              title="仅进行中"
-            >进行中</button>
-          </div>
-          <!-- 暂停滚动 -->
-          <button 
-            class="log-action-btn" 
-            :class="{ active: !logAutoScroll }"
-            @click="logAutoScroll = !logAutoScroll"
-            :title="logAutoScroll ? '暂停滚动' : '继续滚动'"
-          >
-            {{ logAutoScroll ? '⏸' : '▶' }}
-          </button>
-          <!-- 清除日志 -->
-          <button 
-            class="log-action-btn" 
-            @click="clearLogs"
-            title="清除日志"
-          >🗑</button>
-          <!-- 导出日志 -->
-          <button 
-            class="log-action-btn" 
-            @click="exportLogs"
-            title="导出日志"
-          >📥</button>
-          <!-- 最小化按钮 -->
-          <button 
-            class="log-action-btn log-minimize-btn" 
-            @click="logMinimized = !logMinimized"
-            :title="logMinimized ? '展开' : '最小化'"
-          >
-            {{ logMinimized ? '□' : '─' }}
-          </button>
-        </div>
-      </div>
-      <!-- 日志内容区域 -->
-      <div
-        class="log-area" 
-        id="logArea" 
-        ref="logAreaRef"
-      >
-      <div 
-        v-for="(log, index) in filteredLogs" 
-        :key="index" 
-        class="log-item"
-        :class="{ 'new-log': log.isNew, [getLogLevelClass(log.tag)]: true }"
-        @click="copyLog(log)"
-      >
-        <span class="log-time" :title="log.fullTime">{{ log.time }}</span>
-        <span class="log-tag" :class="[log.tag.toLowerCase(), getLogLevelClass(log.tag)]">{{ log.tag }}</span>
-        <span class="log-msg">{{ log.msg }}</span>
-        <span v-if="log.isNew" class="log-new-badge">NEW</span>
-      </div>
-      <div v-if="filteredLogs.length === 0" class="log-empty">
-        <span v-if="logSearchText">没有找到匹配的日志</span>
-        <span v-else-if="logFilter !== 'all'">没有匹配的日志类型</span>
-        <span v-else>暂无日志</span>
-      </div>
-    </div>
-
     <!-- 添加/编辑 Model/Case Modal -->
-    <div class="modal-overlay" :class="{ show: modalVisible }" @click.self="hideModal">
+    <div class="modal-overlay" :class="{ show: modalVisible }">
       <div class="modal">
         <div class="modal-title">{{ isEditing ? (modalType === 'model' ? 'Edit Model' : 'Edit Test Case') : (modalType === 'model' ? 'Add Model' : 'Add Test Case') }}</div>
         
@@ -337,7 +227,7 @@
         <div v-if="modalType === 'model'">
           <div class="form-group">
             <label class="form-label">Name</label>
-            <input type="text" class="form-input" v-model="modelForm.name" placeholder="My Model" :disabled="isEditing" />
+            <input type="text" class="form-input" v-model="modelForm.name" placeholder="My Model" />
           </div>
           <div class="form-group">
             <label class="form-label">Endpoint</label>
@@ -350,6 +240,20 @@
           <div class="form-group">
             <label class="form-label">Model</label>
             <input type="text" class="form-input" v-model="modelForm.model" placeholder="gpt-4o-mini" />
+          </div>
+          <!-- 测试按钮 -->
+          <div class="form-group">
+            <button 
+              class="btn btn-test" 
+              @click="testModel" 
+              :disabled="!canTestModel || isTesting"
+            >
+              {{ isTesting ? '测试中...' : '🧪 测试连接' }}
+            </button>
+            <div v-if="testResult" class="test-result" :class="testResult.success ? 'success' : 'error'">
+              <span v-if="testResult.success">✓ 连接成功 ({{ testResult.latency_ms }}ms)</span>
+              <span v-else>✗ {{ testResult.error }}</span>
+            </div>
           </div>
         </div>
         
@@ -401,7 +305,7 @@
     </div>
 
     <!-- 测试启动配置 Modal -->
-    <div class="modal-overlay" :class="{ show: startConfigVisible }">
+    <div class="modal-overlay" :class="{ show: startConfigVisible }" @click.self="hideStartConfig">
       <div class="modal">
         <div class="modal-title">测试启动配置</div>
         <div class="form-group">
@@ -577,7 +481,7 @@
     </div>
 
     <!-- 历史记录 Modal -->
-    <div class="modal-overlay" :class="{ show: historyVisible }">
+    <div class="modal-overlay" :class="{ show: historyVisible }" @click.self="hideHistoryModal">
       <div class="modal history-modal">
         <div class="modal-title">测试历史记录</div>
         <div class="modal-body">
@@ -714,10 +618,9 @@
     </div>
 
     <!-- Toast -->
-    <div class="toast" :class="{ show: toastVisible, [toastType]: true }">{{ toastMessage }}</div>
+      <div class="toast" :class="{ show: toastVisible, [toastType]: true }">{{ toastMessage }}</div>
   </div>
-  </div>
-</template>
+  </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
@@ -949,7 +852,13 @@ const modelForm = reactive({
   name: '',
   endpoint: '',
   api_key: '',
-  model: ''
+  model: '',
+  temperature: 0.7,
+  top_p: 1.0,
+  max_tokens: 4096,
+  presence_penalty: 0.0,
+  frequency_penalty: 0.0,
+  thinking_enabled: true
 })
 const caseForm = reactive({
   name: '',
@@ -1173,6 +1082,10 @@ function stopDrag() {
   // 鼠标放开后检查是否需要自动折叠/展开，传入拖拽开始前的状态
   checkCollapseState(sidebarWidth.value, wasCollapsedBeforeDrag.value)
   
+  // 保存折叠状态到 localStorage
+  localStorage.setItem('sidebarCollapsed', String(isCollapsed.value))
+  localStorage.setItem('sidebarWidth', String(sidebarWidth.value))
+  
   isDragging.value = false
   document.removeEventListener('mousemove', onDrag)
   document.removeEventListener('mouseup', stopDrag)
@@ -1189,6 +1102,9 @@ function toggleSidebar() {
     isCollapsed.value = true
     sidebarWidth.value = COLLAPSED_WIDTH
   }
+  // 保存折叠状态到 localStorage
+  localStorage.setItem('sidebarCollapsed', String(isCollapsed.value))
+  localStorage.setItem('sidebarWidth', String(sidebarWidth.value))
 }
 
 // 浮动日志面板拖拽 - 优化版本，使用 transform 提升性能
@@ -1553,6 +1469,8 @@ function selectAllCases() {
 function showModal(type: 'model' | 'case') {
   modalType.value = type
   modalVisible.value = true
+  // 清除之前的测试结果
+  testResult.value = null
 }
 
 function hideModal() {
@@ -1578,13 +1496,15 @@ async function submitModal() {
   // 如果是编辑模式
   if (currentEditModelName.value) {
     const data = {
-      name: currentEditModelName.value,
+      name: modelForm.name,  // 使用表单中的新名称
       endpoint: modelForm.endpoint,
       api_key: modelForm.api_key,
       model: modelForm.model,
       enabled: true
     }
-    const res = await fetch(`/config/models/${encodeURIComponent(currentEditModelName.value)}`, {
+    // 使用旧名称作为 URL 参数进行更新
+    const oldName = currentEditModelName.value
+    const res = await fetch(`/config/models/${encodeURIComponent(oldName)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
@@ -1594,6 +1514,16 @@ async function submitModal() {
     else {
       showToast('Model updated', 'success')
       config.value.models = result.models
+      
+      // 如果名称改变了，需要更新选中状态
+      if (oldName !== modelForm.name) {
+        if (selectedModels.value.has(oldName)) {
+          selectedModels.value.delete(oldName)
+          selectedModels.value.add(modelForm.name)
+          localStorage.setItem('selectedModels', JSON.stringify([...selectedModels.value]))
+        }
+      }
+      
       hideModal()
     }
     return
@@ -2445,6 +2375,12 @@ function editModel(model: any) {
   modelForm.endpoint = model.endpoint || ''
   modelForm.api_key = model.api_key || ''
   modelForm.model = model.model || ''
+  modelForm.temperature = model.temperature ?? 0.7
+  modelForm.top_p = model.top_p ?? 1.0
+  modelForm.max_tokens = model.max_tokens ?? 4096
+  modelForm.presence_penalty = model.presence_penalty ?? 0.0
+  modelForm.frequency_penalty = model.frequency_penalty ?? 0.0
+  modelForm.thinking_enabled = model.thinking_enabled ?? true
   
   // 保存当前编辑的模型名称
   currentEditModelName.value = model.name
@@ -2456,6 +2392,53 @@ function editModel(model: any) {
 
 const currentEditCaseId = ref<string | null>(null)
 const currentEditModelName = ref<string | null>(null)
+
+// 测试功能状态
+const isTesting = ref(false)
+const testResult = ref<{ success: boolean; latency_ms?: number; error?: string; response_preview?: string } | null>(null)
+
+// 判断是否可以测试（需要填写 endpoint, api_key, model）
+const canTestModel = computed(() => {
+  return modelForm.endpoint && modelForm.api_key && modelForm.model
+})
+
+// 测试模型连接
+async function testModel() {
+  if (!canTestModel.value || isTesting.value) return
+  
+  isTesting.value = true
+  testResult.value = null
+  
+  try {
+    // 如果是编辑模式，使用当前编辑的模型名称
+    // 否则使用表单中填写的信息进行测试
+    const modelData = {
+      endpoint: modelForm.endpoint,
+      api_key: modelForm.api_key,
+      model: modelForm.model
+    }
+    
+    const res = await fetch('/config/models/ping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(modelData)
+    })
+    
+    const data = await res.json()
+    testResult.value = data
+    
+    if (data.success) {
+      showToast('连接测试成功', 'success')
+    } else {
+      showToast('连接测试失败: ' + (data.error || '未知错误'), 'error')
+    }
+  } catch (e) {
+    testResult.value = { success: false, error: String(e) }
+    showToast('连接测试失败', 'error')
+  } finally {
+    isTesting.value = false
+  }
+}
 
 // 历史记录
 function showHistoryModal() {
@@ -2592,9 +2575,14 @@ function handleEvent(event: any) {
           console.log('[complete] response saved, length:', data.response.length)
         }
         
+        // 检查所有轮次是否都已完成
         const subTasks = tasks.value[taskId].sub_tasks
-        const allDone = Object.values(subTasks).every(t => t.status === 'done' || t.status === 'error')
-        if (allDone && Object.keys(subTasks).length >= totalRounds) {
+        const subTaskKeys = Object.keys(subTasks)
+        const allDone = subTaskKeys.length > 0 && subTaskKeys.every(key => 
+          subTasks[key].status === 'done' || subTasks[key].status === 'error'
+        )
+        
+        if (allDone) {
           tasks.value[taskId].status = 'done'
           calculateAverages(taskId)
         }
@@ -2781,10 +2769,20 @@ onMounted(async () => {
   // 加载卡片位置和尺寸
   loadCardPositions()
   
-  // 检查窗口宽度，如果小于等于自动折叠阈值则默认折叠
-  if (window.innerWidth <= AUTO_COLLAPSE_WIDTH) {
-    isCollapsed.value = true
-    sidebarWidth.value = COLLAPSED_WIDTH
+  // 加载侧边栏状态（折叠状态和宽度）
+  const savedCollapsed = localStorage.getItem('sidebarCollapsed')
+  const savedWidth = localStorage.getItem('sidebarWidth')
+  if (savedCollapsed !== null) {
+    isCollapsed.value = savedCollapsed === 'true'
+  }
+  if (savedWidth) {
+    sidebarWidth.value = parseInt(savedWidth)
+  } else {
+    // 如果没有保存的宽度，检查窗口宽度是否需要自动折叠
+    if (window.innerWidth <= AUTO_COLLAPSE_WIDTH) {
+      isCollapsed.value = true
+      sidebarWidth.value = COLLAPSED_WIDTH
+    }
   }
   
   await loadConfig()
@@ -2942,6 +2940,55 @@ onUnmounted(() => {
 .btn-secondary {
   &:hover:not(:disabled) {
     background: var(--gray-50);
+  }
+}
+
+/* 测试按钮样式 */
+.btn-test {
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  
+  &:hover:not(:disabled) {
+    background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+  }
+  
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  
+  &:active:not(:disabled) {
+    transform: translateY(0);
+  }
+}
+
+/* 测试结果样式 */
+.test-result {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  
+  &.success {
+    background: rgba(34, 197, 94, 0.15);
+    color: #16a34a;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+  }
+  
+  &.error {
+    background: rgba(239, 68, 68, 0.15);
+    color: #dc2626;
+    border: 1px solid rgba(239, 68, 68, 0.3);
   }
 }
 

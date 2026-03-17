@@ -398,6 +398,9 @@ class TestEventEmitter:
                     output_text=output_text
                 )
                 print(f"[Emitter] 已保存测试结果: {group_id} - {model_name} - R{current_round}")
+                
+                # 更新 test_groups 表的 completed_rounds 和统计信息
+                self._update_group_progress(group_id, success)
             except Exception as e:
                 print(f"[Emitter] 保存测试结果失败: {e}")
 
@@ -419,8 +422,12 @@ class TestEventEmitter:
         # 立即保存状态（确保轮次状态更新到文件）
         self._save_state()
 
-    async def emit_error(self, error: str, model_name: str = ""):
+    async def emit_error(self, error: str, model_name: str = "", group_id: str = None):
         """发射错误事件"""
+        # 从 current_test 获取 group_id
+        if not group_id and self._current_test:
+            group_id = self._current_test.get("group_id")
+        
         await self.emit(TestEvent(
             event_type="error",
             data={
@@ -435,6 +442,10 @@ class TestEventEmitter:
         # 完成后也标记状态
         if self._current_test:
             self._current_test["completed_count"] = self._current_test.get("completed_count", 0) + 1
+        
+        # 更新 test_groups 表的进度（错误也计入失败）
+        if group_id:
+            self._update_group_progress(group_id, success=False)
         
         # 保存状态（包含 error 事件）
         self._save_state()
@@ -480,6 +491,40 @@ class TestEventEmitter:
             "test_cases": config.get("test_cases", []),
             "completed_count": 0
         }
+    
+    def _update_group_progress(self, group_id: str, success: bool):
+        """更新测试组的进度（每轮完成后调用）"""
+        if not self._use_db or not self._db or not group_id:
+            return
+        
+        try:
+            # 获取当前统计
+            results = self._db.get_results(group_id)
+            success_count = sum(1 for r in results if r.get("success", 0) == 1)
+            failed_count = len(results) - success_count
+            
+            # 检查是否全部完成
+            group = self._db.get_group(group_id)
+            total_rounds = group.get("total_rounds", 0) if group else 0
+            completed_rounds = len(results)
+            
+            # 确定状态
+            if completed_rounds >= total_rounds and total_rounds > 0:
+                status = "completed"
+            else:
+                status = "running"
+            
+            # 更新 test_groups 表
+            self._db.update_group(
+                group_id=group_id,
+                status=status,
+                completed_rounds=completed_rounds,
+                success_count=success_count,
+                failed_count=failed_count
+            )
+            print(f"[Emitter] 已更新测试组进度: {group_id}, 完成: {completed_rounds}/{total_rounds}, 状态: {status}")
+        except Exception as e:
+            print(f"[Emitter] 更新测试组进度失败: {e}")
 
     def get_history(self) -> List[TestEvent]:
         """获取历史事件"""

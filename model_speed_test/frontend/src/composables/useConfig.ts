@@ -6,6 +6,12 @@ export interface Model {
   api_key: string
   model: string
   enabled?: boolean
+  temperature?: number
+  top_p?: number
+  max_tokens?: number
+  presence_penalty?: number
+  frequency_penalty?: number
+  thinking_enabled?: boolean
 }
 
 export interface TestCase {

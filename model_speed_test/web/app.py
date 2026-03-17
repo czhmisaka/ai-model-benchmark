@@ -153,208 +153,931 @@ async def reset_test():
 
 @app.get("/config")
 async def get_config():
-    """获取当前配置"""
+    """获取当前配置 - 从数据库读取"""
     import json
     from pathlib import Path
+    import sqlite3
     
-    config_path = Path(__file__).parent.parent / "config" / "config.json"
-    if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        return config
-    return {"error": "配置文件不存在"}
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    
+    # 首先尝试从数据库读取
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # 获取模型
+            cursor.execute("""
+                SELECT id, name, endpoint, api_key, model, enabled,
+                       temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled 
+                FROM models
+            """)
+            models = []
+            for row in cursor.fetchall():
+                models.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "endpoint": row["endpoint"],
+                    "api_key": row["api_key"],
+                    "model": row["model"],
+                    "enabled": bool(row["enabled"]),
+                    "temperature": row["temperature"] if row["temperature"] is not None else 0.7,
+                    "top_p": row["top_p"] if row["top_p"] is not None else 1.0,
+                    "max_tokens": row["max_tokens"] if row["max_tokens"] is not None else 4096,
+                    "presence_penalty": row["presence_penalty"] if row["presence_penalty"] is not None else 0.0,
+                    "frequency_penalty": row["frequency_penalty"] if row["frequency_penalty"] is not None else 0.0,
+                    "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True
+                })
+            
+            # 获取测试用例
+            cursor.execute("""
+                SELECT case_id, name, type, description, max_tokens, 
+                       temperature, stream, system_prompt, messages, metadata, enabled 
+                FROM test_cases
+            """)
+            test_cases = []
+            for row in cursor.fetchall():
+                messages = row["messages"]
+                if messages:
+                    try:
+                        messages = json.loads(messages)
+                    except:
+                        messages = []
+                else:
+                    messages = []
+                
+                metadata = row["metadata"]
+                if metadata:
+                    try:
+                        metadata = json.loads(metadata)
+                    except:
+                        metadata = {}
+                else:
+                    metadata = {}
+                
+                test_cases.append({
+                    "id": row["case_id"],
+                    "name": row["name"],
+                    "type": row["type"],
+                    "description": row["description"],
+                    "max_tokens": row["max_tokens"] or 2000,
+                    "temperature": row["temperature"] or 0.7,
+                    "stream": bool(row["stream"]) if row["stream"] is not None else True,
+                    "system_prompt": row["system_prompt"],
+                    "messages": messages,
+                    "metadata": metadata,
+                    "enabled": bool(row["enabled"])
+                })
+            
+            conn.close()
+            
+            # 从数据库读取并发配置
+            concurrency = {"test_rounds": 10, "interval": 1, "max_concurrent": 3, "num_requests": 1}
+            output = {"results_dir": "results", "save_detailed_logs": True, "save_io_records": True, "export_csv": True, "export_jsonl": True}
+            thresholds = {"ttft_max": 10, "min_tokens_per_sec": 10, "max_total_time": 60}
+            
+            try:
+                cursor.execute("SELECT key, value FROM system_config")
+                for row in cursor.fetchall():
+                    if row["key"] == "concurrency":
+                        concurrency = json.loads(row["value"])
+                    elif row["key"] == "output":
+                        output = json.loads(row["value"])
+                    elif row["key"] == "thresholds":
+                        thresholds = json.loads(row["value"])
+            except Exception as e:
+                print(f"从数据库读取系统配置失败: {e}")
+            
+            return {
+                "version": "1.0.0",
+                "models": models,
+                "test_cases": test_cases,
+                "concurrency": concurrency,
+                "output": output,
+                "thresholds": thresholds
+            }
+        else:
+            raise Exception("config.db not found")
+    except Exception as e:
+        # 如果数据库读取失败，回退到从JSON文件读取
+        print(f"从数据库读取配置失败: {e}")
+        config_path = Path(__file__).parent.parent / "config" / "config.json"
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            return config
+        return {"error": "配置文件不存在"}
 
 
 @app.post("/config/models")
 async def add_model(model_data: dict):
-    """添加模型"""
+    """添加模型 - 操作数据库"""
     import json
     from pathlib import Path
+    import sqlite3
+    import uuid
     
-    config_path = Path(__file__).parent.parent / "config" / "config.json"
-    if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        
-        # 添加新模型
-        if "models" not in config:
-            config["models"] = []
-        
-        # 检查是否已存在
-        for m in config["models"]:
-            if m.get("name") == model_data.get("name"):
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # 检查是否已存在
+            cursor.execute("SELECT name FROM models WHERE name = ?", (model_data.get("name"),))
+            if cursor.fetchone():
+                conn.close()
                 return {"error": "模型已存在"}
-        
-        config["models"].append(model_data)
-        
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        
-        return {"status": "success", "models": config["models"]}
-    
-    return {"error": "配置文件不存在"}
+            
+            # 插入新模型
+            model_id = str(uuid.uuid4())
+            name = model_data.get("name", "")
+            provider = model_data.get("provider", "custom")
+            endpoint = model_data.get("endpoint", "")
+            api_key = model_data.get("api_key", "")
+            model = model_data.get("model", name)
+            enabled = 1 if model_data.get("enabled", True) else 0
+            
+            # 新参数
+            temperature = model_data.get("temperature", 0.7)
+            top_p = model_data.get("top_p", 1.0)
+            max_tokens = model_data.get("max_tokens", 4096)
+            presence_penalty = model_data.get("presence_penalty", 0.0)
+            frequency_penalty = model_data.get("frequency_penalty", 0.0)
+            thinking_enabled = 1 if model_data.get("thinking_enabled", True) else 0
+            
+            cursor.execute("""
+                INSERT INTO models (model_id, name, provider, endpoint, api_key, model, group_name, tags, metadata, enabled, status, health_check_enabled, health_check_result, created_at, updated_at, temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (model_id, name, provider, endpoint, api_key, model, "production", "[]", "{}", enabled, "active", 1, "{}", datetime.now().isoformat(), datetime.now().isoformat(), temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled))
+            
+            conn.commit()
+            
+            # 返回更新后的所有模型列表（包含所有参数字段）
+            cursor.execute("""
+                SELECT id, name, endpoint, api_key, model, enabled,
+                       temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled
+                FROM models
+            """)
+            models = []
+            for row in cursor.fetchall():
+                models.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "endpoint": row["endpoint"],
+                    "api_key": row["api_key"],
+                    "model": row["model"],
+                    "enabled": bool(row["enabled"]),
+                    "temperature": row["temperature"] if row["temperature"] is not None else 0.7,
+                    "top_p": row["top_p"] if row["top_p"] is not None else 1.0,
+                    "max_tokens": row["max_tokens"] if row["max_tokens"] is not None else 4096,
+                    "presence_penalty": row["presence_penalty"] if row["presence_penalty"] is not None else 0.0,
+                    "frequency_penalty": row["frequency_penalty"] if row["frequency_penalty"] is not None else 0.0,
+                    "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True
+                })
+            
+            conn.close()
+            return {"status": "success", "models": models}
+        else:
+            raise Exception("config.db not found")
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.put("/config/models/{model_name}")
 async def update_model(model_name: str, model_data: dict):
-    """更新模型"""
+    """更新模型 - 操作数据库"""
     import json
     from pathlib import Path
+    import sqlite3
     
-    config_path = Path(__file__).parent.parent / "config" / "config.json"
-    if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        
-        # 查找并更新模型
-        found = False
-        for m in config.get("models", []):
-            if m.get("name") == model_name:
-                # 更新模型信息（保留原名称）
-                m["endpoint"] = model_data.get("endpoint", m.get("endpoint", ""))
-                m["api_key"] = model_data.get("api_key", m.get("api_key", ""))
-                m["model"] = model_data.get("model", m.get("model", ""))
-                m["enabled"] = model_data.get("enabled", m.get("enabled", True))
-                found = True
-                break
-        
-        if not found:
-            return {"error": "模型不存在"}
-        
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        
-        return {"status": "success", "models": config["models"]}
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
     
-    return {"error": "配置文件不存在"}
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # 获取新的名称（如果名称被修改了）
+            new_name = model_data.get("name", model_name)
+            
+            # 构建更新语句
+            updates = []
+            params = []
+            
+            if "endpoint" in model_data:
+                updates.append("endpoint = ?")
+                params.append(model_data["endpoint"])
+            if "api_key" in model_data:
+                updates.append("api_key = ?")
+                params.append(model_data["api_key"])
+            if "model" in model_data:
+                updates.append("model = ?")
+                params.append(model_data["model"])
+            if "enabled" in model_data:
+                updates.append("enabled = ?")
+                params.append(1 if model_data["enabled"] else 0)
+            if "name" in model_data:
+                updates.append("name = ?")
+                params.append(model_data["name"])
+            
+            # 新参数
+            if "temperature" in model_data:
+                updates.append("temperature = ?")
+                params.append(model_data["temperature"])
+            if "top_p" in model_data:
+                updates.append("top_p = ?")
+                params.append(model_data["top_p"])
+            if "max_tokens" in model_data:
+                updates.append("max_tokens = ?")
+                params.append(model_data["max_tokens"])
+            if "presence_penalty" in model_data:
+                updates.append("presence_penalty = ?")
+                params.append(model_data["presence_penalty"])
+            if "frequency_penalty" in model_data:
+                updates.append("frequency_penalty = ?")
+                params.append(model_data["frequency_penalty"])
+            if "thinking_enabled" in model_data:
+                updates.append("thinking_enabled = ?")
+                params.append(1 if model_data["thinking_enabled"] else 0)
+            
+            updates.append("updated_at = ?")
+            params.append(datetime.now().isoformat())
+            
+            # 如果名称改变了，需要先检查新名称是否已存在
+            if new_name != model_name:
+                cursor.execute("SELECT id FROM models WHERE name = ? AND name != ?", (new_name, model_name))
+                if cursor.fetchone():
+                    conn.close()
+                    return {"error": "模型名称已存在"}
+            
+            params.append(model_name)
+            
+            cursor.execute(f"""
+                UPDATE models 
+                SET {', '.join(updates)}
+                WHERE name = ?
+            """, params)
+            
+            conn.commit()
+            
+            # 检查是否更新成功
+            if cursor.rowcount == 0:
+                conn.close()
+                return {"error": "模型不存在"}
+            
+            # 返回更新后的所有模型列表（包含所有参数字段）
+            cursor.execute("""
+                SELECT id, name, endpoint, api_key, model, enabled,
+                       temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled
+                FROM models
+            """)
+            models = []
+            for row in cursor.fetchall():
+                models.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "endpoint": row["endpoint"],
+                    "api_key": row["api_key"],
+                    "model": row["model"],
+                    "enabled": bool(row["enabled"]),
+                    "temperature": row["temperature"] if row["temperature"] is not None else 0.7,
+                    "top_p": row["top_p"] if row["top_p"] is not None else 1.0,
+                    "max_tokens": row["max_tokens"] if row["max_tokens"] is not None else 4096,
+                    "presence_penalty": row["presence_penalty"] if row["presence_penalty"] is not None else 0.0,
+                    "frequency_penalty": row["frequency_penalty"] if row["frequency_penalty"] is not None else 0.0,
+                    "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True
+                })
+            
+            conn.close()
+            return {"status": "success", "models": models}
+        else:
+            raise Exception("config.db not found")
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.delete("/config/models/{model_name}")
 async def delete_model(model_name: str):
-    """删除模型"""
+    """删除模型 - 操作数据库"""
     import json
     from pathlib import Path
+    import sqlite3
     
-    config_path = Path(__file__).parent.parent / "config" / "config.json"
-    if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        
-        # 删除模型
-        config["models"] = [m for m in config.get("models", []) if m.get("name") != model_name]
-        
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        
-        return {"status": "success", "models": config["models"]}
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
     
-    return {"error": "配置文件不存在"}
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute("DELETE FROM models WHERE name = ?", (model_name,))
+            
+            conn.commit()
+            
+            if cursor.rowcount == 0:
+                conn.close()
+                return {"error": "模型不存在"}
+            
+            # 返回更新后的所有模型列表（包含所有参数字段）
+            cursor.execute("""
+                SELECT id, name, endpoint, api_key, model, enabled,
+                       temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled
+                FROM models
+            """)
+            models = []
+            for row in cursor.fetchall():
+                models.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "endpoint": row["endpoint"],
+                    "api_key": row["api_key"],
+                    "model": row["model"],
+                    "enabled": bool(row["enabled"]),
+                    "temperature": row["temperature"] if row["temperature"] is not None else 0.7,
+                    "top_p": row["top_p"] if row["top_p"] is not None else 1.0,
+                    "max_tokens": row["max_tokens"] if row["max_tokens"] is not None else 4096,
+                    "presence_penalty": row["presence_penalty"] if row["presence_penalty"] is not None else 0.0,
+                    "frequency_penalty": row["frequency_penalty"] if row["frequency_penalty"] is not None else 0.0,
+                    "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True
+                })
+            
+            conn.close()
+            return {"status": "success", "models": models}
+        else:
+            raise Exception("config.db not found")
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/config/models/ping")
+async def ping_model_direct(model_data: dict):
+    """通用模型连接测试 - 直接使用传入的配置"""
+    import asyncio
+    import time
+    from pathlib import Path
+    
+    try:
+        # 验证配置完整性
+        endpoint = model_data.get("endpoint", "")
+        api_key = model_data.get("api_key", "")
+        model = model_data.get("model", "")
+        
+        if not endpoint:
+            return {"success": False, "error": "endpoint 未配置"}
+        if not api_key:
+            return {"success": False, "error": "api_key 未配置"}
+        if not model:
+            return {"success": False, "error": "model 未配置"}
+        
+        # 尝试创建客户端并发送测试请求
+        try:
+            # 动态导入 client 模块
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            from src.client import ModelClient
+            
+            # 创建客户端
+            client = ModelClient(
+                name="test_model",
+                endpoint=endpoint,
+                api_key=api_key,
+                model=model
+            )
+            
+            # 记录开始时间
+            start_time = time.time()
+            
+            # 发送简单的测试请求 - 使用流式响应，在首token返回时判定成功
+            try:
+                first_token_time = None
+                content_preview = ""
+                
+                async for chunk in client.chat_stream(
+                    prompt="你好！请回复一句问候语测试连接。",
+                    max_tokens=100
+                ):
+                    # 记录首token时间
+                    if first_token_time is None:
+                        first_token_time = time.time()
+                    
+                    # 收集内容用于预览
+                    if chunk.content:
+                        content_preview += chunk.content
+                    
+                    # 首token返回后立即判定成功
+                    if first_token_time is not None and content_preview:
+                        break
+                
+                end_time = time.time()
+                latency_ms = round((end_time - start_time) * 1000, 2)
+                
+                await client.close()
+                
+                # 检查返回结果
+                if content_preview:
+                    return {
+                        "success": True,
+                        "latency_ms": latency_ms,
+                        "response_preview": content_preview[:100] if len(content_preview) > 100 else content_preview
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": "模型返回为空"
+                    }
+                    
+            except asyncio.TimeoutError:
+                await client.close()
+                return {
+                    "success": False,
+                    "error": "请求超时（30秒）"
+                }
+            except Exception as e:
+                try:
+                    await client.close()
+                except:
+                    pass
+                return {
+                    "success": False,
+                    "error": str(e)
+                }
+                
+        except ImportError as e:
+            return {
+                "success": False,
+                "error": f"无法导入客户端模块: {str(e)}"
+            }
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/config/models/{model_name}/ping")
+async def ping_model(model_name: str):
+    """验证模型连接 - 发送简单测试请求"""
+    import asyncio
+    import time
+    from pathlib import Path
+    import sqlite3
+    
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    
+    try:
+        if not config_db_path.exists():
+            return {"success": False, "error": "配置文件不存在"}
+        
+        conn = sqlite3.connect(str(config_db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # 获取模型配置
+        cursor.execute("""
+            SELECT name, endpoint, api_key, model, provider 
+            FROM models WHERE name = ?
+        """, (model_name,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return {"success": False, "error": "模型不存在"}
+        
+        model_config = {
+            "name": row["name"],
+            "endpoint": row["endpoint"],
+            "api_key": row["api_key"],
+            "model": row["model"],
+            "provider": row["provider"]
+        }
+        
+        # 验证配置完整性
+        if not model_config.get("endpoint"):
+            return {"success": False, "error": "模型 endpoint 未配置"}
+        if not model_config.get("api_key"):
+            return {"success": False, "error": "模型 api_key 未配置"}
+        if not model_config.get("model"):
+            return {"success": False, "error": "模型名称未配置"}
+        
+        # 尝试创建客户端并发送测试请求
+        try:
+            # 动态导入 client 模块
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            from src.client import ModelClient
+            
+            # 创建客户端
+            client = ModelClient(
+                name=model_config["name"],
+                endpoint=model_config["endpoint"],
+                api_key=model_config["api_key"],
+                model=model_config["model"]
+            )
+            
+            # 记录开始时间
+            start_time = time.time()
+            
+            # 发送简单的测试请求
+            try:
+                result = await asyncio.wait_for(
+                    client.chat(
+                        prompt="你好！请回复一句问候语测试连接。",
+                        max_tokens=100,
+                        stream=False
+                    ),
+                    timeout=30.0  # 30秒超时
+                )
+                
+                end_time = time.time()
+                latency_ms = round((end_time - start_time) * 1000, 2)
+                
+                await client.close()
+                
+                # 检查返回结果
+                content = result.get("content", "")
+                if content:
+                    return {
+                        "success": True,
+                        "latency_ms": latency_ms,
+                        "response_preview": content[:100] if len(content) > 100 else content
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": "模型返回为空"
+                    }
+                    
+            except asyncio.TimeoutError:
+                await client.close()
+                return {
+                    "success": False,
+                    "error": "请求超时（30秒）"
+                }
+            except Exception as e:
+                try:
+                    await client.close()
+                except:
+                    pass
+                return {
+                    "success": False,
+                    "error": str(e)
+                }
+                
+        except ImportError as e:
+            return {
+                "success": False,
+                "error": f"无法导入客户端模块: {str(e)}"
+            }
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @app.post("/config/test-cases")
 async def add_test_case(test_case_data: dict):
-    """添加测试用例"""
+    """添加测试用例 - 保存到数据库"""
     import json
     from pathlib import Path
+    import sqlite3
+    import uuid
+    import time
     
-    config_path = Path(__file__).parent.parent / "config" / "config.json"
-    if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        
-        # 添加新测试用例
-        if "test_cases" not in config:
-            config["test_cases"] = []
-        
-        # 生成 ID
-        import time
-        test_case_data["id"] = test_case_data.get("id", f"tc_{int(time.time())}")
-        test_case_data["enabled"] = True
-        
-        # 支持 messages 数组格式
-        # 如果有 messages，将其转换为 prompt 兼容旧系统
-        if "messages" in test_case_data and isinstance(test_case_data["messages"], list):
-            # 从最后一条 user 消息提取内容作为 prompt
-            for msg in reversed(test_case_data["messages"]):
-                if msg.get("role") == "user":
-                    test_case_data["prompt"] = msg.get("content", "")
-                    break
-        
-        config["test_cases"].append(test_case_data)
-        
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        
-        return {"status": "success", "test_cases": config["test_cases"]}
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
     
-    return {"error": "配置文件不存在"}
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # 生成 case_id
+            case_id = test_case_data.get("id", f"tc_{int(time.time() * 1000)}")
+            
+            # 检查是否已存在
+            cursor.execute("SELECT case_id FROM test_cases WHERE case_id = ?", (case_id,))
+            if cursor.fetchone():
+                conn.close()
+                # 如果 ID 存在，生成一个新的
+                case_id = f"tc_{int(time.time() * 1000)}"
+            
+            name = test_case_data.get("name", "New Test Case")
+            case_type = test_case_data.get("type", "custom")
+            description = test_case_data.get("description", "")
+            max_tokens = test_case_data.get("max_tokens", 2000)
+            temperature = test_case_data.get("temperature", 0.7)
+            stream = 1 if test_case_data.get("stream", True) else 0
+            system_prompt = test_case_data.get("system_prompt", "")
+            
+            # 处理 messages
+            messages = test_case_data.get("messages", [])
+            if messages:
+                messages_json = json.dumps(messages, ensure_ascii=False)
+                # 从最后一条 user 消息提取内容作为 prompt
+                prompt = ""
+                for msg in reversed(messages):
+                    if msg.get("role") == "user":
+                        prompt = msg.get("content", "")
+                        break
+            else:
+                messages_json = "[]"
+                prompt = test_case_data.get("prompt", "")
+            
+            metadata = test_case_data.get("metadata", {})
+            metadata_json = json.dumps(metadata, ensure_ascii=False)
+            
+            enabled = 1 if test_case_data.get("enabled", True) else 0
+            
+            # 插入新测试用例
+            cursor.execute("""
+                INSERT INTO test_cases (case_id, name, type, description, max_tokens, temperature, stream, system_prompt, messages, metadata, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (case_id, name, case_type, description, max_tokens, temperature, stream, system_prompt, messages_json, metadata_json, enabled, datetime.now().isoformat(), datetime.now().isoformat()))
+            
+            conn.commit()
+            
+            # 返回更新后的所有测试用例列表
+            cursor.execute("""
+                SELECT case_id, name, type, description, max_tokens, 
+                       temperature, stream, system_prompt, messages, metadata, enabled 
+                FROM test_cases
+            """)
+            test_cases = []
+            for row in cursor.fetchall():
+                messages = row["messages"]
+                if messages:
+                    try:
+                        messages = json.loads(messages)
+                    except:
+                        messages = []
+                else:
+                    messages = []
+                
+                metadata = row["metadata"]
+                if metadata:
+                    try:
+                        metadata = json.loads(metadata)
+                    except:
+                        metadata = {}
+                else:
+                    metadata = {}
+                
+                test_cases.append({
+                    "id": row["case_id"],
+                    "name": row["name"],
+                    "type": row["type"],
+                    "description": row["description"],
+                    "max_tokens": row["max_tokens"] or 2000,
+                    "temperature": row["temperature"] or 0.7,
+                    "stream": bool(row["stream"]) if row["stream"] is not None else True,
+                    "system_prompt": row["system_prompt"],
+                    "messages": messages,
+                    "metadata": metadata,
+                    "enabled": bool(row["enabled"])
+                })
+            
+            conn.close()
+            return {"status": "success", "test_cases": test_cases}
+        else:
+            raise Exception("config.db not found")
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.put("/config/test-cases/{test_case_id}")
 async def update_test_case(test_case_id: str, test_case_data: dict):
-    """更新测试用例"""
+    """更新测试用例 - 操作数据库"""
     import json
     from pathlib import Path
+    import sqlite3
     
-    config_path = Path(__file__).parent.parent / "config" / "config.json"
-    if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        
-        # 查找并更新测试用例
-        found = False
-        for tc in config.get("test_cases", []):
-            if tc.get("id") == test_case_id:
-                # 更新测试用例信息（保留原ID）
-                tc["name"] = test_case_data.get("name", tc.get("name", ""))
-                # 支持 messages 数组格式
-                if "messages" in test_case_data:
-                    tc["messages"] = test_case_data["messages"]
-                    # 同时更新 prompt 字段以兼容旧系统
-                    # 从最后一条 user 消息提取内容作为 prompt
-                    for msg in reversed(test_case_data["messages"]):
-                        if msg.get("role") == "user":
-                            tc["prompt"] = msg.get("content", "")
-                            break
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # 构建更新语句
+            updates = []
+            params = []
+            
+            if "name" in test_case_data:
+                updates.append("name = ?")
+                params.append(test_case_data["name"])
+            if "type" in test_case_data:
+                updates.append("type = ?")
+                params.append(test_case_data["type"])
+            if "description" in test_case_data:
+                updates.append("description = ?")
+                params.append(test_case_data["description"])
+            if "max_tokens" in test_case_data:
+                updates.append("max_tokens = ?")
+                params.append(test_case_data["max_tokens"])
+            if "temperature" in test_case_data:
+                updates.append("temperature = ?")
+                params.append(test_case_data["temperature"])
+            if "stream" in test_case_data:
+                updates.append("stream = ?")
+                params.append(1 if test_case_data["stream"] else 0)
+            if "system_prompt" in test_case_data:
+                updates.append("system_prompt = ?")
+                params.append(test_case_data["system_prompt"])
+            if "messages" in test_case_data:
+                updates.append("messages = ?")
+                params.append(json.dumps(test_case_data["messages"], ensure_ascii=False))
+            if "metadata" in test_case_data:
+                updates.append("metadata = ?")
+                params.append(json.dumps(test_case_data["metadata"], ensure_ascii=False))
+            if "enabled" in test_case_data:
+                updates.append("enabled = ?")
+                params.append(1 if test_case_data["enabled"] else 0)
+            
+            updates.append("updated_at = ?")
+            params.append(datetime.now().isoformat())
+            
+            params.append(test_case_id)
+            
+            cursor.execute(f"""
+                UPDATE test_cases 
+                SET {', '.join(updates)}
+                WHERE case_id = ?
+            """, params)
+            
+            conn.commit()
+            
+            # 检查是否更新成功
+            if cursor.rowcount == 0:
+                conn.close()
+                return {"error": "测试用例不存在"}
+            
+            # 返回更新后的所有测试用例列表
+            cursor.execute("""
+                SELECT case_id, name, type, description, max_tokens, 
+                       temperature, stream, system_prompt, messages, metadata, enabled 
+                FROM test_cases
+            """)
+            test_cases = []
+            for row in cursor.fetchall():
+                messages = row["messages"]
+                if messages:
+                    try:
+                        messages = json.loads(messages)
+                    except:
+                        messages = []
                 else:
-                    tc["prompt"] = test_case_data.get("prompt", tc.get("prompt", ""))
-                tc["max_tokens"] = test_case_data.get("max_tokens", tc.get("max_tokens", 500))
-                tc["temperature"] = test_case_data.get("temperature", tc.get("temperature", 0.7))
-                tc["stream"] = test_case_data.get("stream", tc.get("stream", True))
-                found = True
-                break
-        
-        if not found:
-            return {"error": "测试用例不存在"}
-        
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        
-        return {"status": "success", "test_cases": config["test_cases"]}
+                    messages = []
+                
+                metadata = row["metadata"]
+                if metadata:
+                    try:
+                        metadata = json.loads(metadata)
+                    except:
+                        metadata = {}
+                else:
+                    metadata = {}
+                
+                test_cases.append({
+                    "id": row["case_id"],
+                    "name": row["name"],
+                    "type": row["type"],
+                    "description": row["description"],
+                    "max_tokens": row["max_tokens"] or 2000,
+                    "temperature": row["temperature"] or 0.7,
+                    "stream": bool(row["stream"]) if row["stream"] is not None else True,
+                    "system_prompt": row["system_prompt"],
+                    "messages": messages,
+                    "metadata": metadata,
+                    "enabled": bool(row["enabled"])
+                })
+            
+            conn.close()
+            return {"status": "success", "test_cases": test_cases}
+        else:
+            raise Exception("config.db not found")
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.put("/config/system")
+async def update_system_config(request: Request):
+    """更新系统配置（concurrency/output/thresholds）- 保存到数据库"""
+    import json
+    from pathlib import Path
+    import sqlite3
     
-    return {"error": "配置文件不存在"}
+    data = await request.json()
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            cursor = conn.cursor()
+            
+            # 更新 concurrency
+            if "concurrency" in data:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_config (key, value, description, updated_at)
+                    VALUES (?, ?, ?, ?)
+                """, ("concurrency", json.dumps(data["concurrency"], ensure_ascii=False), "并发配置", datetime.now().isoformat()))
+            
+            # 更新 output
+            if "output" in data:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_config (key, value, description, updated_at)
+                    VALUES (?, ?, ?, ?)
+                """, ("output", json.dumps(data["output"], ensure_ascii=False), "输出配置", datetime.now().isoformat()))
+            
+            # 更新 thresholds
+            if "thresholds" in data:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_config (key, value, description, updated_at)
+                    VALUES (?, ?, ?, ?)
+                """, ("thresholds", json.dumps(data["thresholds"], ensure_ascii=False), "阈值配置", datetime.now().isoformat()))
+            
+            conn.commit()
+            conn.close()
+            return {"status": "success"}
+        else:
+            raise Exception("config.db not found")
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.delete("/config/test-cases/{test_case_id}")
 async def delete_test_case(test_case_id: str):
-    """删除测试用例"""
+    """删除测试用例 - 操作数据库"""
     import json
     from pathlib import Path
+    import sqlite3
     
-    config_path = Path(__file__).parent.parent / "config" / "config.json"
-    if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        
-        # 删除测试用例
-        config["test_cases"] = [tc for tc in config.get("test_cases", []) if tc.get("id") != test_case_id]
-        
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        
-        return {"status": "success", "test_cases": config["test_cases"]}
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
     
-    return {"error": "配置文件不存在"}
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute("DELETE FROM test_cases WHERE case_id = ?", (test_case_id,))
+            
+            conn.commit()
+            
+            if cursor.rowcount == 0:
+                conn.close()
+                return {"error": "测试用例不存在"}
+            
+            # 返回更新后的所有测试用例列表
+            cursor.execute("""
+                SELECT case_id, name, type, description, max_tokens, 
+                       temperature, stream, system_prompt, messages, metadata, enabled 
+                FROM test_cases
+            """)
+            test_cases = []
+            for row in cursor.fetchall():
+                messages = row["messages"]
+                if messages:
+                    try:
+                        messages = json.loads(messages)
+                    except:
+                        messages = []
+                else:
+                    messages = []
+                
+                metadata = row["metadata"]
+                if metadata:
+                    try:
+                        metadata = json.loads(metadata)
+                    except:
+                        metadata = {}
+                else:
+                    metadata = {}
+                
+                test_cases.append({
+                    "id": row["case_id"],
+                    "name": row["name"],
+                    "type": row["type"],
+                    "description": row["description"],
+                    "max_tokens": row["max_tokens"] or 2000,
+                    "temperature": row["temperature"] or 0.7,
+                    "stream": bool(row["stream"]) if row["stream"] is not None else True,
+                    "system_prompt": row["system_prompt"],
+                    "messages": messages,
+                    "metadata": metadata,
+                    "enabled": bool(row["enabled"])
+                })
+            
+            conn.close()
+            return {"status": "success", "test_cases": test_cases}
+        else:
+            raise Exception("config.db not found")
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # 测试控制
@@ -440,6 +1163,7 @@ async def start_test(request: Request):
     # 在后台线程运行测试
     import threading
     import asyncio
+    import sqlite3
     
     def run_test():
         import sys
@@ -449,7 +1173,132 @@ async def start_test(request: Request):
         from main import create_clients, get_enabled_test_cases, load_config
         from concurrent.futures import ThreadPoolExecutor
         
-        config = load_config()
+        # 首先从数据库加载配置
+        config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+        
+        config = {
+            "models": [],
+            "test_cases": [],
+            "concurrency": {"test_rounds": 10, "interval": 1, "max_concurrent": 3},
+            "output": {"results_dir": "results"}
+        }
+        
+        # 从数据库读取测试用例
+        if config_db_path.exists():
+            try:
+                conn = sqlite3.connect(str(config_db_path))
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                # 读取启用的测试用例
+                cursor.execute("""
+                    SELECT case_id, name, type, description, max_tokens, 
+                           temperature, stream, system_prompt, messages, metadata, enabled 
+                    FROM test_cases WHERE enabled = 1
+                """)
+                
+                for row in cursor.fetchall():
+                    messages = row["messages"]
+                    if messages:
+                        try:
+                            messages = json.loads(messages)
+                        except:
+                            messages = []
+                    else:
+                        messages = []
+                    
+                    metadata = row["metadata"]
+                    if metadata:
+                        try:
+                            metadata = json.loads(metadata)
+                        except:
+                            metadata = {}
+                    else:
+                        metadata = {}
+                    
+                    test_case = {
+                        "id": row["case_id"],
+                        "name": row["name"],
+                        "type": row["type"],
+                        "description": row["description"],
+                        "max_tokens": row["max_tokens"] or 2000,
+                        "temperature": row["temperature"] or 0.7,
+                        "stream": bool(row["stream"]) if row["stream"] is not None else True,
+                        "system_prompt": row["system_prompt"],
+                        "messages": messages,
+                        "metadata": metadata,
+                        "enabled": bool(row["enabled"])
+                    }
+                    
+                    # 如果指定了 case_ids，则过滤
+                    if case_ids and row["case_id"] not in case_ids:
+                        continue
+                    
+                    config["test_cases"].append(test_case)
+                
+                conn.close()
+            except Exception as e:
+                print(f"从数据库读取测试用例失败: {e}")
+        
+        # 如果没有从数据库读到测试用例，回退到 JSON 配置
+        if not config.get("test_cases"):
+            json_config = load_config()
+            config["test_cases"] = json_config.get("test_cases", [])
+            
+            # 也读取模型配置
+            config["models"] = json_config.get("models", [])
+            
+            # 如果指定了 case_ids，过滤测试用例
+            if case_ids:
+                config["test_cases"] = [tc for tc in config["test_cases"] if tc.get("id") in case_ids]
+        else:
+            # 从数据库读取模型配置
+            config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+            if config_db_path.exists():
+                try:
+                    conn = sqlite3.connect(str(config_db_path))
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    
+                    cursor.execute("SELECT name, endpoint, api_key, model, enabled FROM models WHERE enabled = 1")
+                    
+                    for row in cursor.fetchall():
+                        config["models"].append({
+                            "name": row["name"],
+                            "endpoint": row["endpoint"],
+                            "api_key": row["api_key"],
+                            "model": row["model"],
+                            "enabled": bool(row["enabled"])
+                        })
+                    
+                    conn.close()
+                except Exception as e:
+                    print(f"从数据库读取模型失败: {e}")
+        
+        # 如果没有模型，回退到 JSON 配置
+        if not config.get("models"):
+            json_config = load_config()
+            config["models"] = json_config.get("models", [])
+        
+        # 过滤指定模型
+        if model_names:
+            config["models"] = [m for m in config["models"] if m.get("name") in model_names]
+        
+        # 从数据库读取并发/输出配置（如果前端没有传入）
+        if config_db_path.exists():
+            try:
+                conn = sqlite3.connect(str(config_db_path))
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT key, value FROM system_config")
+                for row in cursor.fetchall():
+                    if row["key"] == "concurrency" and test_rounds is None and max_concurrent is None and interval is None:
+                        config["concurrency"] = json.loads(row["value"])
+                    elif row["key"] == "output" and "output" not in config:
+                        config["output"] = json.loads(row["value"])
+                conn.close()
+            except Exception as e:
+                print(f"从数据库读取并发配置失败: {e}")
         
         # 如果前端传入了配置参数，覆盖配置文件中的值
         if test_rounds is not None:
@@ -468,13 +1317,7 @@ async def start_test(request: Request):
             config["concurrency"]["interval"] = interval
         
         # 获取测试用例
-        test_cases = []
-        if case_ids:
-            for tc in config.get("test_cases", []):
-                if tc.get("id") in case_ids:
-                    test_cases.append(tc)
-        else:
-            test_cases = get_enabled_test_cases(config)
+        test_cases = [tc for tc in config.get("test_cases", []) if tc.get("enabled", True)]
         
         # 创建客户端
         clients = create_clients(config, model_names if model_names else None)
@@ -521,34 +1364,80 @@ async def start_test(request: Request):
     # 保存线程引用以便后续停止
     _test_thread = thread
     
-    # 从线程外部加载配置（因为 run_test 内部的 import 可能还没执行完）
-    from main import load_config, get_enabled_test_cases
-    config = load_config()
+    # 从数据库加载配置信息用于返回给前端
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
     test_cases = []
-    if case_ids:
-        for tc in config.get("test_cases", []):
-            if tc.get("id") in case_ids:
-                test_cases.append(tc)
-    else:
-        test_cases = get_enabled_test_cases(config)
+    models_list = []
     
-    conc_config = config.get("concurrency", {})
-    # 优先使用前端传入的 test_rounds，否则使用配置文件的值
+    if config_db_path.exists():
+        try:
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # 获取测试用例
+            cursor.execute("""
+                SELECT case_id, name, enabled FROM test_cases WHERE enabled = 1
+            """)
+            for row in cursor.fetchall():
+                if case_ids and row["case_id"] not in case_ids:
+                    continue
+                test_cases.append({"id": row["case_id"], "name": row["name"]})
+            
+            # 获取模型
+            cursor.execute("SELECT name, enabled FROM models WHERE enabled = 1")
+            for row in cursor.fetchall():
+                if model_names and row["name"] not in model_names:
+                    continue
+                models_list.append(row["name"])
+            
+            conn.close()
+        except Exception as e:
+            print(f"读取配置失败: {e}")
+    
+    # 如果没有从数据库获取到，回退到 JSON 配置
+    if not test_cases:
+        from main import load_config, get_enabled_test_cases
+        json_config = load_config()
+        if case_ids:
+            for tc in json_config.get("test_cases", []):
+                if tc.get("id") in case_ids:
+                    test_cases.append({"id": tc.get("id"), "name": tc.get("name")})
+        else:
+            test_cases = [{"id": tc.get("id"), "name": tc.get("name")} for tc in get_enabled_test_cases(json_config)]
+    
+    if not models_list:
+        json_config = load_config()
+        enabled_models = [m["name"] for m in json_config.get("models", []) if m.get("enabled", True)]
+        models_list = model_names if model_names else enabled_models
+    
+    # 从数据库读取并发配置
+    conc_config = {"test_rounds": 10, "max_concurrent": 3, "interval": 1}
+    if config_db_path.exists():
+        try:
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM system_config WHERE key = 'concurrency'")
+            row = cursor.fetchone()
+            if row:
+                conc_config = json.loads(row["value"])
+            conn.close()
+        except Exception as e:
+            print(f"读取并发配置失败: {e}")
+    
+    # 优先使用前端传入的 test_rounds，否则使用数据库的值
     total_rounds = test_rounds if test_rounds is not None else conc_config.get("test_rounds", 10)
-    
-    # 获取实际要测试的模型列表
-    enabled_models = [m["name"] for m in config.get("models", []) if m.get("enabled", True)]
-    actual_models = model_names if model_names else enabled_models
     
     # 返回测试配置信息，让前端可以立即创建任务卡片
     return {
         "status": "started",
         "config": {
-            "models": actual_models,
+            "models": models_list,
             "cases": [tc.get("name") for tc in test_cases],
             "total_rounds": total_rounds,
             "concurrency": concurrent,
-            "client_count": len(actual_models),
+            "client_count": len(models_list),
             "max_concurrent": max_concurrent,
             "interval": interval,
             "test_name": test_name

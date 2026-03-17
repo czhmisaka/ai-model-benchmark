@@ -15,6 +15,15 @@
           <button class="select-all-btn" @click="$emit('select-all-models')" title="Select/Deselect All">
             {{ allModelsSelected ? '⊙' : '○' }}
           </button>
+          <button 
+            class="ping-all-btn" 
+            @click="pingAllModels" 
+            title="批量验证所有模型"
+            :disabled="isPingingAll"
+            :class="{ 'ping-all-loading': isPingingAll }"
+          >
+            {{ isPingingAll ? '⏳' : '⚡' }}
+          </button>
           <button class="add-btn" @click="$emit('add-model')" title="Add Model">+</button>
         </div>
       </div>
@@ -30,6 +39,21 @@
         >
           <div class="item-checkbox">{{ selectedModels.has(model.name) ? '✓' : '' }}</div>
           <div class="item-name" :title="model.name">{{ model.name }}</div>
+          <button 
+            class="item-ping" 
+            @click.stop="pingModel(model.name)"
+            :title="modelPingStatus[model.name] === 'success' ? '验证成功' : (modelPingStatus[model.name] === 'error' ? '验证失败，点击重试' : '验证模型连接')"
+            :class="{ 
+              'ping-success': modelPingStatus[model.name] === 'success',
+              'ping-error': modelPingStatus[model.name] === 'error',
+              'ping-loading': modelPingStatus[model.name] === 'loading'
+            }"
+          >
+            <span v-if="modelPingStatus[model.name] === 'loading'">...</span>
+            <span v-else-if="modelPingStatus[model.name] === 'success'">✓</span>
+            <span v-else-if="modelPingStatus[model.name] === 'error'">✗</span>
+            <span v-else>⚡</span>
+          </button>
           <button class="item-edit" @click.stop="$emit('edit-model', model)" title="Edit">✎</button>
           <button class="item-delete" @click.stop="$emit('delete-model', model.name)" title="Delete">×</button>
         </div>
@@ -74,7 +98,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, reactive, ref } from 'vue'
 
 interface Model {
   name: string
@@ -119,6 +143,54 @@ const emit = defineEmits<{
   'case-hover': [event: MouseEvent, caseItem: TestCase]
   'case-leave': []
 }>()
+
+// 模型验证状态
+const modelPingStatus = reactive<Record<string, 'loading' | 'success' | 'error'>>({})
+
+// 批量验证状态
+const isPingingAll = ref(false)
+
+// 验证模型连接
+async function pingModel(modelName: string) {
+  // 如果正在验证，跳过
+  if (modelPingStatus[modelName] === 'loading') return
+  
+  // 设置验证中状态
+  modelPingStatus[modelName] = 'loading'
+  
+  try {
+    const response = await fetch(`/config/models/${encodeURIComponent(modelName)}/ping`, {
+      method: 'POST'
+    })
+    
+    const result = await response.json()
+    
+    if (result.success) {
+      modelPingStatus[modelName] = 'success'
+      console.log(`模型 ${modelName} 验证成功，延迟: ${result.latency_ms}ms`)
+    } else {
+      modelPingStatus[modelName] = 'error'
+      console.error(`模型 ${modelName} 验证失败: ${result.error}`)
+    }
+  } catch (error) {
+    modelPingStatus[modelName] = 'error'
+    console.error(`模型 ${modelName} 验证失败:`, error)
+  }
+}
+
+// 批量验证所有模型
+async function pingAllModels() {
+  if (isPingingAll.value || !props.models?.length) return
+  
+  isPingingAll.value = true
+  
+  // 串行验证每个模型
+  for (const model of props.models) {
+    await pingModel(model.name)
+  }
+  
+  isPingingAll.value = false
+}
 
 const allModelsSelected = computed(() => 
   props.models?.length > 0 && props.selectedModels.size === props.models.length
@@ -257,6 +329,39 @@ const allCasesSelected = computed(() =>
   align-items: center;
 }
 
+.ping-all-btn {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border: 1px solid var(--gray-300);
+  background: transparent;
+  border-radius: 4px;
+  color: var(--gray-500);
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 1;
+  
+  &:hover:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: var(--gray-50);
+  }
+  
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+  
+  &.ping-all-loading {
+    color: var(--primary);
+  }
+}
+
 .select-all-btn {
   width: 22px;
   height: 22px;
@@ -342,6 +447,67 @@ const allCasesSelected = computed(() =>
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
+}
+
+.item-ping {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  border: none;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 12px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: all 0.2s;
+  margin-left: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  
+  .item:hover & {
+    opacity: 1;
+  }
+  
+  &:hover {
+    background: var(--primary-dim);
+    color: var(--primary);
+  }
+  
+  &.ping-success {
+    opacity: 1;
+    color: var(--success);
+    
+    &:hover {
+      background: rgba(34, 197, 94, 0.1);
+    }
+  }
+  
+  &.ping-error {
+    opacity: 1;
+    color: var(--accent-red);
+    
+    &:hover {
+      background: rgba(239, 68, 68, 0.1);
+    }
+  }
+  
+  &.ping-loading {
+    opacity: 1;
+    color: var(--primary);
+    animation: pulse 1s infinite;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .item-delete, .item-edit {

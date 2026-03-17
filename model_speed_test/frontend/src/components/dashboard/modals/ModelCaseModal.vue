@@ -14,7 +14,6 @@
             class="form-input" 
             v-model="modelForm.name" 
             placeholder="My Model" 
-            :disabled="isEditing" 
           />
         </div>
         <div class="form-group">
@@ -43,6 +42,89 @@
             v-model="modelForm.model" 
             placeholder="gpt-4o-mini" 
           />
+        </div>
+        
+        <!-- 模型参数配置 -->
+        <div class="params-section">
+          <div class="params-title">模型参数</div>
+          
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Temperature</label>
+              <input 
+                type="number" 
+                class="form-input" 
+                v-model.number="modelForm.temperature" 
+                placeholder="0.7"
+                step="0.1"
+                min="0"
+                max="2"
+              />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Top P</label>
+              <input 
+                type="number" 
+                class="form-input" 
+                v-model.number="modelForm.top_p" 
+                placeholder="1.0"
+                step="0.1"
+                min="0"
+                max="1"
+              />
+            </div>
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Max Tokens</label>
+              <input 
+                type="number" 
+                class="form-input" 
+                v-model.number="modelForm.max_tokens" 
+                placeholder="4096"
+                step="1"
+                min="1"
+              />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Presence Penalty</label>
+              <input 
+                type="number" 
+                class="form-input" 
+                v-model.number="modelForm.presence_penalty" 
+                placeholder="0.0"
+                step="0.1"
+                min="-2"
+                max="2"
+              />
+            </div>
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Frequency Penalty</label>
+              <input 
+                type="number" 
+                class="form-input" 
+                v-model.number="modelForm.frequency_penalty" 
+                placeholder="0.0"
+                step="0.1"
+                min="-2"
+                max="2"
+              />
+            </div>
+            <div class="form-group checkbox-group">
+              <label class="form-label">思考模式</label>
+              <label class="checkbox-label">
+                <input 
+                  type="checkbox" 
+                  v-model="modelForm.thinking_enabled" 
+                />
+                <span>启用深度思考</span>
+              </label>
+            </div>
+          </div>
         </div>
       </div>
       
@@ -360,6 +442,65 @@ defineEmits<{
     border-color: var(--primary);
     color: var(--primary);
     background: var(--gray-50);
+  }
+}
+
+/* 参数配置区域样式 */
+.params-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--gray-200);
+}
+
+.params-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--gray-700);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+  
+  .form-group {
+    flex: 1;
+  }
+}
+
+.checkbox-group {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 8px 12px;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  color: var(--gray-700);
+  transition: all 0.2s;
+  
+  &:hover {
+    border-color: var(--primary);
+    background: var(--white);
+  }
+  
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+  }
+  
+  span {
+    font-weight: 500;
   }
 }
 </style>

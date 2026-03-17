@@ -75,15 +75,43 @@ from web.app import app as fastapi_app
 
 
 def load_config(config_path: str = "config/config.json") -> Dict[str, Any]:
-    """加载JSON配置文件"""
+    """加载配置文件 - 从数据库读取 concurrency/output/thresholds"""
     config_file = Path(__file__).parent / config_path
     
-    if not config_file.exists():
+    # 首先尝试从JSON文件读取
+    config = {}
+    if config_file.exists():
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    
+    # 从数据库读取 concurrency、output、thresholds
+    import sqlite3
+    config_db_path = Path(__file__).parent / "results" / "config.db"
+    
+    if config_db_path.exists():
+        try:
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, value FROM system_config")
+            for row in cursor.fetchall():
+                if row["key"] == "concurrency":
+                    config["concurrency"] = json.loads(row["value"])
+                elif row["key"] == "output":
+                    config["output"] = json.loads(row["value"])
+                elif row["key"] == "thresholds":
+                    config["thresholds"] = json.loads(row["value"])
+            conn.close()
+        except Exception as e:
+            print(f"从数据库读取配置失败: {e}")
+            # 如果数据库读取失败，使用JSON文件中的值
+            pass
+    
+    if not config:
         print(f"配置文件不存在: {config_file}")
         sys.exit(1)
     
-    with open(config_file, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return config
 
 
 def get_enabled_models(config: Dict[str, Any], model_names: List[str] = None) -> List[Dict]:
@@ -567,37 +595,43 @@ class WebAwareTester:
                 # 使用 asyncio.wait_for 添加超时控制
                 async def stream_with_timeout():
                     nonlocal full_content, first_token_time, stream_completed
-                    async for chunk in tester.client.chat_stream(
-                        prompt=None,
-                        max_tokens=tester.test_config.get("max_tokens", 500),
-                        temperature=tester.test_config.get("temperature", 0.7),
-                        messages=messages,
-                        system_prompt=system_prompt
-                    ):
-                        # 检查是否收到停止信号（在每个 chunk 后检查）
-                        if self.should_stop():
-                            print(f"[{model_name}] 收到停止信号，正在中断...")
-                            break
-                        
-                        # 记录首 token 时间
-                        current_time = asyncio.get_event_loop().time()
-                        if first_token_time is None:
-                            first_token_time = current_time - start_time
-                        
-                        full_content += chunk.content
-                        
-                        # 推送流式块（包含轮次信息）
-                        if self.enable_web:
-                            await test_emitter.emit_chunk(
-                                content=chunk.content,
-                                is_first=chunk.is_first,
-                                model_name=model_name,
-                                test_case_name=test_case_name,
-                                current_round=i + 1,
-                                total_rounds=rounds
-                            )
-                    
-                    stream_completed = True
+                    try:
+                        async for chunk in tester.client.chat_stream(
+                            prompt=None,
+                            max_tokens=tester.test_config.get("max_tokens", 500),
+                            temperature=tester.test_config.get("temperature", 0.7),
+                            messages=messages,
+                            system_prompt=system_prompt
+                        ):
+                            # 检查是否收到停止信号（在每个 chunk 后检查）
+                            if self.should_stop():
+                                print(f"[{model_name}] 收到停止信号，正在中断...")
+                                break
+
+                            # 记录首 token 时间
+                            current_time = asyncio.get_event_loop().time()
+                            if first_token_time is None:
+                                first_token_time = current_time - start_time
+
+                            full_content += chunk.content
+
+                            # 推送流式块（包含轮次信息）
+                            if self.enable_web:
+                                await test_emitter.emit_chunk(
+                                    content=chunk.content,
+                                    is_first=chunk.is_first,
+                                    model_name=model_name,
+                                    test_case_name=test_case_name,
+                                    current_round=i + 1,
+                                    total_rounds=rounds
+                                )
+                    except Exception as stream_err:
+                        # 记录流式处理中的错误，但仍然标记为完成
+                        print(f"[{model_name}] 流式处理错误: {stream_err}")
+                    finally:
+                        # 关键修复：无论是否出错，都要标记流式处理已完成
+                        # 这样 emit_complete 一定会被调用
+                        stream_completed = True
                 
                 # 等待流式请求完成或超时
                 await asyncio.wait_for(stream_with_timeout(), timeout=self.timeout)
