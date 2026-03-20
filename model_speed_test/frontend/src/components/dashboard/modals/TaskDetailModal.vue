@@ -93,6 +93,17 @@
                   <div class="io-content output">{{ subTask.output }}</div>
                 </div>
               </div>
+              <!-- 校对结果展示 -->
+              <div class="detail-round-evaluation" v-if="subTask.evaluation">
+                <div class="evaluation-badge" :class="{ correct: subTask.evaluation.is_correct, incorrect: !subTask.evaluation.is_correct }">
+                  <span class="evaluation-icon">{{ subTask.evaluation.is_correct ? '✓' : '✗' }}</span>
+                  <span class="evaluation-label">校对结果:</span>
+                  <span class="evaluation-rate">{{ subTask.evaluation.rate }}/10</span>
+                </div>
+                <div class="evaluation-reason" v-if="subTask.evaluation.reason">
+                  {{ subTask.evaluation.reason }}
+                </div>
+              </div>
               <div class="detail-round-error" v-if="subTask.status === 'error'">
                 错误: {{ subTask.error || '未知错误' }}
               </div>
@@ -109,6 +120,12 @@
 </template>
 
 <script setup lang="ts">
+interface Evaluation {
+  is_correct: boolean
+  rate: number
+  reason: string
+}
+
 interface SubTask {
   name: string
   output: string
@@ -116,6 +133,7 @@ interface SubTask {
   metrics: any
   prompt?: string
   error?: string
+  evaluation?: Evaluation
 }
 
 interface TaskData {
@@ -414,6 +432,67 @@ function trimText(text: string): string {
   border-radius: 4px;
   font-size: 0.7rem;
   color: var(--accent-red);
+}
+
+// 校对结果样式
+.detail-round-evaluation {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--gray-200);
+}
+
+.evaluation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  
+  &.correct {
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    color: #16a34a;
+    
+    .evaluation-icon {
+      color: #16a34a;
+    }
+  }
+  
+  &.incorrect {
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #dc2626;
+    
+    .evaluation-icon {
+      color: #dc2626;
+    }
+  }
+}
+
+.evaluation-icon {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.evaluation-label {
+  color: var(--gray-600);
+}
+
+.evaluation-rate {
+  font-weight: 600;
+  color: inherit;
+}
+
+.evaluation-reason {
+  margin-top: 6px;
+  font-size: 0.7rem;
+  color: var(--gray-600);
+  line-height: 1.4;
+  padding: 6px 8px;
+  background: var(--gray-50);
+  border-radius: 4px;
 }
 
 .form-actions {

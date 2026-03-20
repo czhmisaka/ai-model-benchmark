@@ -22,6 +22,9 @@ class TestCase:
     prompt_template: str = ""
     variables: Dict[str, Any] = field(default_factory=dict)
     expected_output_type: str = "text"  # text, json, jsonl
+    # 标准答案相关
+    expected_output: str = ""  # 标准答案（可选）
+    eval_model: str = ""  # 校对模型名称（可选，留空则使用被测模型）
     metadata: Dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())

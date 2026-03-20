@@ -67,6 +67,10 @@
           <div class="stat-value">{{ selectedGroup.total_rounds || 0 }}</div>
           <div class="stat-label">总轮数</div>
         </div>
+        <div class="stat-item" v-if="selectedGroup.total_duration_seconds">
+          <div class="stat-value">{{ formatDuration(selectedGroup.total_duration_seconds) }}</div>
+          <div class="stat-label">总耗时</div>
+        </div>
       </div>
       <button @click="showCharts = true" class="btn-primary">查看图表分析</button>
       <button @click="selectedGroup = null; showCharts = false" class="btn-secondary">返回列表</button>
@@ -142,6 +146,17 @@ const totalPages = computed(() => Math.ceil(history.value.length / pageSize))
 
 function prevPage() { if (page.value > 1) page.value-- }
 function nextPage() { if (page.value < totalPages.value) page.value++ }
+
+// 格式化总耗时
+function formatDuration(seconds: number): string {
+  if (!seconds) return '--'
+  const minutes = Math.floor(seconds / 60)
+  const secs = (seconds % 60).toFixed(1)
+  if (minutes > 0) {
+    return `${minutes}分${secs}秒`
+  }
+  return `${secs}秒`
+}
 
 function formatTime(timestamp: string) {
   if (!timestamp) return '--'

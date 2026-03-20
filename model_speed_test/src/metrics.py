@@ -267,9 +267,18 @@ class MetricsCalculator:
             is_think = chunk.get("is_think", False)
             is_think_end = chunk.get("is_think_end", False)
             
-            # 检测 think 开始 - 优先使用 is_think 标志（适用于 LMStudio 等使用 reasoning_content 的模型）
-            # 备用方案：检查 content 中的 '<think>' 标签（适用于 OpenAI 格式）
-            if not in_think and (is_think or '<think>' in content):
+            # 检测 think 开始 - 支持多种格式的 think 标签
+            # 1. is_think 标志（适用于 LMStudio 等使用 reasoning_content 的模型）
+            # 2. '<think>' 标签（适用于 OpenAI 格式）
+            # 3. '<begin_of_thought>' 标签（适用于 MiniMax 等）
+            has_think_start = (
+                is_think or 
+                '<think>' in content or 
+                '<begin_of_thought>' in content or
+                '<think>' in content.lower()
+            )
+            
+            if not in_think and has_think_start:
                 in_think = True
                 if not think_start_time:
                     think_start_time = timestamp
@@ -279,8 +288,18 @@ class MetricsCalculator:
             else:
                 answer_contents.append(content)
             
-            # 检测 think 结束 - 使用 is_think_end 标志
-            if in_think and is_think_end:
+            # 检测 think 结束 - 支持多种格式
+            # 1. is_think_end 标志
+            # 2. '</think>' 标签
+            # 3. '<end_of_thought>' 标签
+            has_think_end = (
+                is_think_end or 
+                '</think>' in content or 
+                '<end_of_thought>' in content or
+                '</think>' in content.lower()
+            )
+            
+            if in_think and has_think_end:
                 in_think = False
                 think_end_time = timestamp
         
@@ -302,7 +321,9 @@ class MetricsCalculator:
         # 计算 Think Tokens
         if think_contents:
             think_text = "".join(think_contents)
-            # 移除 think 标签，只计算实际内容
+            # 移除各种格式的 think 标签，只计算实际内容
+            think_text = think_text.replace('<think>', '').replace('</think>', '')
+            think_text = think_text.replace('<begin_of_thought>', '').replace('<end_of_thought>', '')
             think_text = think_text.replace('<think>', '').replace('</think>', '')
             metrics.think_tokens = count_tokens(think_text)
         

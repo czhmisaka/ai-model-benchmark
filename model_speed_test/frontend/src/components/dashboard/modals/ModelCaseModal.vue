@@ -16,13 +16,27 @@
             placeholder="My Model" 
           />
         </div>
+        
+        <!-- Provider 选择 -->
+        <div class="form-group">
+          <label class="form-label">Provider</label>
+          <select class="form-input" v-model="modelForm.provider">
+            <option value="openai">OpenAI 兼容</option>
+            <option value="anthropic">Anthropic Claude</option>
+            <option value="gemini">Google Gemini</option>
+            <option value="lmstudio">LM Studio</option>
+            <option value="ollama">Ollama</option>
+            <option value="azure">Azure OpenAI</option>
+          </select>
+        </div>
+        
         <div class="form-group">
           <label class="form-label">Endpoint</label>
           <input 
             type="text" 
             class="form-input" 
             v-model="modelForm.endpoint" 
-            placeholder="https://api.example.com/v1/chat/completions" 
+            :placeholder="endpointPlaceholder" 
           />
         </div>
         <div class="form-group">
@@ -166,6 +180,31 @@
           <label class="form-label">Max Tokens</label>
           <input type="number" class="form-input" v-model="caseForm.max_tokens" value="500" />
         </div>
+        
+        <!-- 标准答案配置 -->
+        <div class="eval-section">
+          <div class="eval-title">质量评估配置（可选）</div>
+          
+          <div class="form-group">
+            <label class="form-label">标准答案</label>
+            <textarea 
+              class="form-input" 
+              v-model="caseForm.expected_output" 
+              placeholder="输入标准答案，用于计算偏离度..."
+              rows="3"
+            ></textarea>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">校对模型</label>
+            <select class="form-input" v-model="caseForm.eval_model">
+              <option value="">无（使用被测模型）</option>
+              <option v-for="model in availableModels" :key="model.name" :value="model.name">
+                {{ model.name }}
+              </option>
+            </select>
+          </div>
+        </div>
       </div>
       
       <div class="form-actions">
@@ -177,7 +216,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { reactive, watch, computed } from 'vue'
 
 interface Message {
   role: string
@@ -186,6 +225,7 @@ interface Message {
 
 interface ModelForm {
   name: string
+  provider: string
   endpoint: string
   api_key: string
   model: string
@@ -195,6 +235,15 @@ interface CaseForm {
   name: string
   messages: Message[]
   max_tokens: number
+  expected_output?: string
+  eval_model?: string
+}
+
+interface ModelOption {
+  name: string
+  endpoint: string
+  api_key: string
+  model: string
 }
 
 interface Props {
@@ -203,9 +252,36 @@ interface Props {
   isEditing: boolean
   modelForm: ModelForm
   caseForm: CaseForm
+  availableModels?: ModelOption[]
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  availableModels: () => []
+})
+
+// Provider 默认端点
+const providerEndpoints: Record<string, string> = {
+  'openai': 'https://api.openai.com/v1/chat/completions',
+  'anthropic': 'https://api.anthropic.com/v1/messages',
+  'gemini': 'https://generativelanguage.googleapis.com/v1beta/models',
+  'lmstudio': 'http://localhost:1234/v1/chat/completions',
+  'ollama': 'http://localhost:11434/api/chat',
+  'azure': 'https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT'
+}
+
+// 计算端点占位符
+const endpointPlaceholder = computed(() => {
+  return providerEndpoints[props.modelForm.provider] || 'https://api.example.com/v1/chat/completions'
+})
+
+// 监听 Provider 变化，自动填充端点
+watch(() => props.modelForm.provider, (newProvider) => {
+  if (!props.modelForm.endpoint || 
+      Object.values(providerEndpoints).includes(props.modelForm.endpoint) ||
+      props.isEditing) {
+    props.modelForm.endpoint = providerEndpoints[newProvider] || ''
+  }
+})
 
 defineEmits<{
   close: []
@@ -501,6 +577,29 @@ defineEmits<{
   
   span {
     font-weight: 500;
+  }
+}
+
+/* 评估配置区域样式 */
+.eval-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--gray-300);
+}
+
+.eval-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--gray-600);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  
+  &::before {
+    content: '⚖';
+    font-size: 0.9rem;
   }
 }
 </style>

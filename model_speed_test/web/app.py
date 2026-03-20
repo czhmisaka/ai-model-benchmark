@@ -65,14 +65,23 @@ TEMPLATE_DIR = WEB_DIR / "templates"
 # 设置模板引擎
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 
+# Vue 前端目录
+VUE_DAND_DIR = Path(__file__).parent.parent / "frontend" / "dist"
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    """主页"""
-    return templates.TemplateResponse(
-        "index.html",
-        {"request": request}
-    )
+    """主页 - 使用 Vue 前端"""
+    index_file = VUE_DAND_DIR / "index.html"
+    if index_file.exists():
+        with open(index_file, 'r', encoding='utf-8') as f:
+            return HTMLResponse(content=f.read())
+    else:
+        # 回退到原生 HTML
+        return templates.TemplateResponse(
+            "index.html",
+            {"request": request}
+        )
 
 
 @app.get("/events")
@@ -193,7 +202,8 @@ async def get_config():
             # 获取测试用例
             cursor.execute("""
                 SELECT case_id, name, type, description, max_tokens, 
-                       temperature, stream, system_prompt, messages, metadata, enabled 
+                       temperature, stream, system_prompt, messages, metadata, enabled,
+                       expected_output, eval_model 
                 FROM test_cases
             """)
             test_cases = []
@@ -227,7 +237,9 @@ async def get_config():
                     "system_prompt": row["system_prompt"],
                     "messages": messages,
                     "metadata": metadata,
-                    "enabled": bool(row["enabled"])
+                    "enabled": bool(row["enabled"]),
+                    "expected_output": row["expected_output"] or '',
+                    "eval_model": row["eval_model"] or ''
                 })
             
             conn.close()
@@ -792,18 +804,23 @@ async def add_test_case(test_case_data: dict):
             
             enabled = 1 if test_case_data.get("enabled", True) else 0
             
+            # 处理新字段
+            expected_output = test_case_data.get("expected_output", "")
+            eval_model = test_case_data.get("eval_model", "")
+            
             # 插入新测试用例
             cursor.execute("""
-                INSERT INTO test_cases (case_id, name, type, description, max_tokens, temperature, stream, system_prompt, messages, metadata, enabled, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (case_id, name, case_type, description, max_tokens, temperature, stream, system_prompt, messages_json, metadata_json, enabled, datetime.now().isoformat(), datetime.now().isoformat()))
+                INSERT INTO test_cases (case_id, name, type, description, max_tokens, temperature, stream, system_prompt, messages, metadata, enabled, expected_output, eval_model, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (case_id, name, case_type, description, max_tokens, temperature, stream, system_prompt, messages_json, metadata_json, enabled, expected_output, eval_model, datetime.now().isoformat(), datetime.now().isoformat()))
             
             conn.commit()
             
             # 返回更新后的所有测试用例列表
             cursor.execute("""
                 SELECT case_id, name, type, description, max_tokens, 
-                       temperature, stream, system_prompt, messages, metadata, enabled 
+                       temperature, stream, system_prompt, messages, metadata, enabled,
+                       expected_output, eval_model 
                 FROM test_cases
             """)
             test_cases = []
@@ -837,7 +854,9 @@ async def add_test_case(test_case_data: dict):
                     "system_prompt": row["system_prompt"],
                     "messages": messages,
                     "metadata": metadata,
-                    "enabled": bool(row["enabled"])
+                    "enabled": bool(row["enabled"]),
+                    "expected_output": row["expected_output"] or '',
+                    "eval_model": row["eval_model"] or ''
                 })
             
             conn.close()
@@ -897,6 +916,12 @@ async def update_test_case(test_case_id: str, test_case_data: dict):
             if "enabled" in test_case_data:
                 updates.append("enabled = ?")
                 params.append(1 if test_case_data["enabled"] else 0)
+            if "expected_output" in test_case_data:
+                updates.append("expected_output = ?")
+                params.append(test_case_data["expected_output"])
+            if "eval_model" in test_case_data:
+                updates.append("eval_model = ?")
+                params.append(test_case_data["eval_model"])
             
             updates.append("updated_at = ?")
             params.append(datetime.now().isoformat())
@@ -919,7 +944,8 @@ async def update_test_case(test_case_id: str, test_case_data: dict):
             # 返回更新后的所有测试用例列表
             cursor.execute("""
                 SELECT case_id, name, type, description, max_tokens, 
-                       temperature, stream, system_prompt, messages, metadata, enabled 
+                       temperature, stream, system_prompt, messages, metadata, enabled,
+                       expected_output, eval_model 
                 FROM test_cases
             """)
             test_cases = []
@@ -953,7 +979,9 @@ async def update_test_case(test_case_id: str, test_case_data: dict):
                     "system_prompt": row["system_prompt"],
                     "messages": messages,
                     "metadata": metadata,
-                    "enabled": bool(row["enabled"])
+                    "enabled": bool(row["enabled"]),
+                    "expected_output": row["expected_output"] or '',
+                    "eval_model": row["eval_model"] or ''
                 })
             
             conn.close()
@@ -1193,7 +1221,8 @@ async def start_test(request: Request):
                 # 读取启用的测试用例
                 cursor.execute("""
                     SELECT case_id, name, type, description, max_tokens, 
-                           temperature, stream, system_prompt, messages, metadata, enabled 
+                           temperature, stream, system_prompt, messages, metadata, enabled,
+                           expected_output, eval_model 
                     FROM test_cases WHERE enabled = 1
                 """)
                 
@@ -1227,7 +1256,9 @@ async def start_test(request: Request):
                         "system_prompt": row["system_prompt"],
                         "messages": messages,
                         "metadata": metadata,
-                        "enabled": bool(row["enabled"])
+                        "enabled": bool(row["enabled"]),
+                        "expected_output": row["expected_output"] or '',
+                        "eval_model": row["eval_model"] or ''
                     }
                     
                     # 如果指定了 case_ids，则过滤
@@ -1260,7 +1291,11 @@ async def start_test(request: Request):
                     conn.row_factory = sqlite3.Row
                     cursor = conn.cursor()
                     
-                    cursor.execute("SELECT name, endpoint, api_key, model, enabled FROM models WHERE enabled = 1")
+                    cursor.execute("""
+                        SELECT name, endpoint, api_key, model, enabled, provider,
+                               temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled
+                        FROM models WHERE enabled = 1
+                    """)
                     
                     for row in cursor.fetchall():
                         config["models"].append({
@@ -1268,7 +1303,14 @@ async def start_test(request: Request):
                             "endpoint": row["endpoint"],
                             "api_key": row["api_key"],
                             "model": row["model"],
-                            "enabled": bool(row["enabled"])
+                            "enabled": bool(row["enabled"]),
+                            "provider": row["provider"] if row["provider"] else "openai",
+                            "temperature": row["temperature"] if row["temperature"] is not None else 0.7,
+                            "top_p": row["top_p"] if row["top_p"] is not None else 1.0,
+                            "max_tokens": row["max_tokens"] if row["max_tokens"] is not None else 4096,
+                            "presence_penalty": row["presence_penalty"] if row["presence_penalty"] is not None else 0.0,
+                            "frequency_penalty": row["frequency_penalty"] if row["frequency_penalty"] is not None else 0.0,
+                            "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True
                         })
                     
                     conn.close()
@@ -1708,8 +1750,8 @@ async def get_models():
         return {"success": False, "error": str(e)}
 
 
-# 挂载静态文件（如果需要）
-# app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), "static")
+# 挂载前端静态文件
+app.mount("/assets", StaticFiles(directory=str(Path(__file__).parent.parent / "frontend" / "dist" / "assets")), "assets")
 
 
 def run_server(host: str = "0.0.0.0", port: int = 15010, log_level: str = "info"):

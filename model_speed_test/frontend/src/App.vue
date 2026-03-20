@@ -9,6 +9,9 @@ import Dashboard from './views/Dashboard.vue'
 </script>
 
 <style lang="scss">
+*{
+  user-select: auto !important;
+}
 :root {
   // 深色模式专业配色方案 - 橙色主调
   // 背景：使用深夜蓝而非纯黑，更柔和护眼

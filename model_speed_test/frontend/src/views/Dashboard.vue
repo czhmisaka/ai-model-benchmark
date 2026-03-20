@@ -159,17 +159,17 @@
           <div class="task-content">
             <div class="task-io">
               <div class="task-io-header">轮次 Rounds - 点击查看详情</div>
-              <div class="round-matrix" :style="{ gridTemplateColumns: `repeat(${getGridColumns(task.total_rounds)}, 1fr)` }">
+              <div class="round-matrix" :class="{ 'dot-mode': useDotMode(task.total_rounds) }" :style="{ gridTemplateColumns: `repeat(${getGridColumns(task.total_rounds)}, 1fr)` }">
                 <div 
                   v-for="(subTask, subId) in task.sub_tasks" 
                   :key="subId"
                   class="round-btn"
-                  :class="subTask.status"
+                  :class="[subTask.status, { 'dot-mode': useDotMode(task.total_rounds) }]"
                   :style="{ fontSize: getFontSize(task.total_rounds) }"
                   @mouseenter="showRoundPopoverForButton($event, taskId, subId, subTask)"
                   @mouseleave="hideRoundPopover"
                 >
-                  {{ getRoundStatusIcon(subTask.status, getSubTaskIndex(task, subId) + 1) }}
+                  {{ getRoundStatusIcon(subTask.status, getSubTaskIndex(task, subId) + 1, task.total_rounds) }}
                 </div>
               </div>
             </div>
@@ -191,10 +191,14 @@
               <div class="task-metric-value">{{ task.total_rounds || 0 }}</div>
               <div class="task-metric-label">总计</div>
             </div>
+            <div class="task-metric">
+              <div class="task-metric-value duration">{{ formatDuration(getTaskDuration(task)) }}</div>
+              <div class="task-metric-label">耗时</div>
+            </div>
           </div>
           <!-- 卡片内的汇总统计（始终显示） -->
           <div class="task-result" :class="{ visible: task.status === 'done' }">
-            <div class="task-result-title">平均数据</div>
+            <div class="task-result-title"><b style="font-weight:800;font-size:1.1em">平均数据</b></div>
             <div class="task-result-grid">
               <div class="task-result-item">
                 <div class="task-result-value">{{ task.avgTtft || '--' }}</div>
@@ -212,6 +216,25 @@
                 <div class="task-result-value">{{ task.avgTokens || '--' }}</div>
                 <div class="task-result-label">Tokens</div>
               </div>
+            </div>
+            
+            <!-- 校对评分区域 - 紧凑单行显示 -->
+            <div class="eval-section" :class="{ 'has-data': task.avgEvalRate !== undefined }">
+              <template v-if="task.avgEvalRate !== undefined">
+                <span class="eval-inline-label">均分:</span>
+                <span class="eval-inline-value" :class="{ correct: task.avgEvalRate >= 6, incorrect: task.avgEvalRate < 6 }">
+                  {{ task.avgEvalRate !== null ? task.avgEvalRate.toFixed(1) + '/10' : '--' }}
+                </span>
+                <span class="eval-divider">|</span>
+                <span class="eval-correct">✓ {{ task.evalCorrectCount || 0 }}</span>
+                <span class="eval-divider">|</span>
+                <span class="eval-incorrect">✗ {{ task.evalIncorrectCount || 0 }}</span>
+                <span class="eval-divider">|</span>
+                <span class="eval-accuracy">{{ getEvalAccuracy(task) }}%</span>
+              </template>
+              <template v-else>
+                <span class="eval-placeholder-text">无校对数据</span>
+              </template>
             </div>
           </div>
         </div>
@@ -294,6 +317,31 @@
           <div class="form-group">
             <label class="form-label">Max Tokens</label>
             <input type="number" class="form-input" v-model="caseForm.max_tokens" value="500" />
+          </div>
+          
+          <!-- 质量评估配置（可选） -->
+          <div class="form-group">
+            <label class="form-label">标准答案 Expected Output（可选，用于质量评估）</label>
+            <textarea 
+              class="form-input" 
+              v-model="caseForm.expected_output" 
+              placeholder="输入标准答案，用于计算偏离度..."
+              rows="3"
+            ></textarea>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">校对模型 Eval Model（可选）</label>
+            <select class="form-input" v-model="caseForm.eval_model">
+              <option value="">不使用校对模型</option>
+              <option 
+                v-for="model in config?.models || []" 
+                :key="model.name" 
+                :value="model.name"
+              >
+                {{ model.name }}
+              </option>
+            </select>
           </div>
         </div>
         
@@ -430,6 +478,17 @@
                   <div class="io-section" v-if="subTask.output">
                     <div class="io-label">输出预览:</div>
                     <div class="io-content output">{{ trimText(subTask.output.substring(0, 500)) }}</div>
+                  </div>
+                </div>
+                <!-- 校对结果展示 -->
+                <div class="detail-round-evaluation" v-if="subTask.evaluation">
+                  <div class="evaluation-badge" :class="{ correct: subTask.evaluation.is_correct, incorrect: !subTask.evaluation.is_correct }">
+                    <span class="evaluation-icon">{{ subTask.evaluation.is_correct ? '✓' : '✗' }}</span>
+                    <span class="evaluation-label">校对结果:</span>
+                    <span class="evaluation-rate">{{ subTask.evaluation.rate }}/10</span>
+                  </div>
+                  <div class="evaluation-reason" v-if="subTask.evaluation.reason">
+                    {{ subTask.evaluation.reason }}
                   </div>
                 </div>
                 <div class="detail-round-error" v-if="subTask.status === 'error'">
@@ -624,6 +683,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 
 // ===== 状态 =====
 const config = ref<any>(null)
@@ -717,6 +777,8 @@ interface SubTask {
   metrics: any
   prompt?: string
   error?: string
+  think_content?: string  // 思考内容
+  answer_content?: string // 回答内容
 }
 
 interface Task {
@@ -735,6 +797,8 @@ interface Task {
   avgThinkTokens?: string
   avgAnswerTokens?: string
   expanded?: boolean  // 展开状态
+  startTime?: number  // 任务开始时间（Unix 时间戳秒）
+  duration?: number   // 任务总耗时（秒），任务完成后设置
 }
 
 const tasks = ref<Record<string, Task>>({})
@@ -865,7 +929,9 @@ const caseForm = reactive({
   messages: [
     { role: 'user', content: '' }
   ],
-  max_tokens: 500
+  max_tokens: 500,
+  expected_output: '',  // 标准答案（用于质量评估）
+  eval_model: ''        // 校对模型名称
 })
 
 // 启动配置
@@ -947,9 +1013,65 @@ function sortTasks() {
   console.log('Sort by:', sortBy.value)
 }
 
-// ===== 方法 =====
+// ===== 工具函数 =====
 
-// 工具函数
+/**
+ * 解析思考内容 - 支持多种标记方式
+ * 支持格式：
+ * 1.<think>...</think> 格式
+ * 2.<think>...</think> 格式  
+ * 3. [[模型分析]]...[[/模型分析]] 格式
+ * 4. THINK: ... ANSWER: ... 格式
+ * 5. 思考过程：... 最终答案：... 格式
+ * 6. reasoning 字段（非流式响应）
+ */
+function extractThinkAndAnswer(content: string): { think: string; answer: string } {
+  if (!content) return { think: '', answer: content }
+  
+  let think = ''
+  let answer = content
+  
+  // 1. 去除 <think>...</think> 格式
+  const thinkMatch1 = content.match(/<think>\s*([\s\S]*?)\s*<\/think>/gi)
+  if (thinkMatch1) {
+    think = thinkMatch1.map(m => m.replace(/<think>\s*/gi, '').replace(/\s*<\/think>/gi, '')).join('\n')
+    answer = content.replace(/<think>\s*[\s\S]*?\s*<\/think>/gi, '').trim()
+  }
+  
+  // 2. 去除 <think>...</think> 格式
+  const thinkMatch2 = content.match(/<think>\s*([\s\S]*?)\s*<\/think>/gi)
+  if (thinkMatch2) {
+    think = thinkMatch2.map(m => m.replace(/<think>\s*/gi, '').replace(/\s*<\/think>/gi, '')).join('\n')
+    answer = answer.replace(/<think>\s*[\s\S]*?\s*<\/think>/gi, '').trim()
+  }
+  
+  // 3. 去除 [[模型分析]]...[[/模型分析]] 格式
+  const thinkMatch3 = content.match(/\[\[模型分析\]\]\s*([\s\S]*?)\s*\[\[\/模型分析\]\]/gi)
+  if (thinkMatch3) {
+    think = thinkMatch3.map(m => m.replace(/\[\[模型分析\]\]\s*/gi, '').replace(/\s*\[\[\/模型分析\]\]/gi, '')).join('\n')
+    answer = answer.replace(/\[\[模型分析\]\]\s*[\s\S]*?\s*\[\[\/模型分析\]\]/gi, '').trim()
+  }
+  
+  // 4. 去除 THINK: ... ANSWER: ... 格式中的 THINK 部分
+  const thinkMatch4 = content.match(/THINK:\s*([\s\S]*?)(?=ANSWER:|$)/gi)
+  if (thinkMatch4) {
+    think = thinkMatch4.map(m => m.replace(/THINK:\s*/gi, '')).join('\n')
+    answer = answer.replace(/THINK:\s*[\s\S]*?(?=ANSWER:|$)/gi, '').replace(/^ANSWER:\s*/i, '').trim()
+  }
+  
+  // 5. 去除 思考: ... 答案: ... 格式中的思考部分
+  const thinkMatch5 = content.match(/思考[：:]\s*([\s\S]*?)(?=答案[：:]|最终答案[：:]|回答[：:]|输出[：:])/gi)
+  if (thinkMatch5) {
+    think = thinkMatch5.map(m => m.replace(/思考[：:]\s*/gi, '')).join('\n')
+    answer = answer.replace(/思考[：:]\s*[\s\S]*?(?=答案[：:]|最终答案[：:]|回答[：:]|输出[：:])/gi, '').trim()
+  }
+  
+  // 清理多余空白
+  think = think.replace(/\n{3,}/g, '\n\n').trim()
+  answer = answer.replace(/\n{3,}/g, '\n\n').trim()
+  
+  return { think, answer }
+}
 function getTaskId(modelName: string, caseName: string): string {
   return `${modelName}__${caseName}`
 }
@@ -979,7 +1101,66 @@ function getFontSize(totalRounds: number): string {
   return '0.4rem'
 }
 
-function getRoundStatusIcon(status: string, roundNum: number): string {
+// 实时更新时间
+const now = ref(Date.now() / 1000)
+let timer: number | null = null
+
+onMounted(() => {
+  // 每秒更新时间
+  timer = window.setInterval(() => {
+    now.value = Date.now() / 1000
+  }, 1000)
+})
+
+onUnmounted(() => {
+  if (timer) {
+    clearInterval(timer)
+  }
+})
+
+// 计算任务的显示耗时
+function getTaskDuration(task: Task): number {
+  if (task.status === 'done' && task.duration) {
+    // 任务完成时显示最终耗时
+    return task.duration
+  }
+  // 运行中或停止时，计算已用时间
+  if (task.startTime) {
+    return now.value - task.startTime
+  }
+  return 0
+}
+
+// 格式化耗时
+function formatDuration(seconds: number): string {
+  if (!seconds || seconds < 0) return '--'
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  if (mins > 0) {
+    return `${mins}分${secs}秒`
+  }
+  return `${secs}秒`
+}
+
+// 判断是否使用圆点模式（超过80轮时）
+function useDotMode(totalRounds: number): boolean {
+  return totalRounds > 80
+}
+
+// 计算校对准确率
+function getEvalAccuracy(task: any): string {
+  const correct = task.evalCorrectCount || 0
+  const incorrect = task.evalIncorrectCount || 0
+  const total = correct + incorrect
+  if (total === 0) return '0'
+  return ((correct / total) * 100).toFixed(1)
+}
+
+function getRoundStatusIcon(status: string, roundNum: number, totalRounds: number = 0): string {
+  // 超过80轮时使用圆点模式，不显示字符
+  if (useDotMode(totalRounds)) {
+    return ''
+  }
   if (status === 'done') return '✓'
   if (status === 'error') return '✗'
   if (status === 'running') return '⟳'
@@ -1477,7 +1658,7 @@ function hideModal() {
   modalVisible.value = false
   // 重置表单
   Object.assign(modelForm, { name: '', endpoint: '', api_key: '', model: '' })
-  Object.assign(caseForm, { name: '', messages: [{ role: 'user', content: '' }], max_tokens: 500 })
+  Object.assign(caseForm, { name: '', messages: [{ role: 'user', content: '' }], max_tokens: 500, expected_output: '', eval_model: '' })
   // 重置编辑状态
   currentEditCaseId.value = null
   currentEditModelName.value = null
@@ -1535,7 +1716,9 @@ async function submitModal() {
       messages: caseForm.messages,
       max_tokens: caseForm.max_tokens,
       temperature: 0.7,
-      stream: true
+      stream: true,
+      expected_output: caseForm.expected_output,
+      eval_model: caseForm.eval_model
     }
     const res = await fetch(`/config/test-cases/${currentEditCaseId.value}`, {
       method: 'PUT',
@@ -1583,7 +1766,9 @@ async function submitModal() {
       messages: caseForm.messages,
       max_tokens: caseForm.max_tokens,
       temperature: 0.7,
-      stream: true
+      stream: true,
+      expected_output: caseForm.expected_output,
+      eval_model: caseForm.eval_model
     }
     // 检查是否至少有一条消息有内容
     const hasContent = caseForm.messages.some((msg: any) => msg.content && msg.content.trim())
@@ -1798,7 +1983,9 @@ function createTask(modelName: string, caseName: string, totalRounds: number = 1
     status: 'running',
     current_round: 0,
     total_rounds: totalRounds,
-    sub_tasks: existingTask ? existingTask.sub_tasks : {}
+    sub_tasks: existingTask ? existingTask.sub_tasks : {},
+    startTime: Date.now() / 1000,  // 记录任务开始时间
+    duration: undefined  // 初始未设置，完成后设置
   }
   
   // 预创建所有轮次
@@ -2146,6 +2333,10 @@ function calculateAverages(taskId: string) {
   let thinkTokenSum = 0, answerTokenSum = 0, answerSpeedSum = 0
   let thinkTokenCount = 0, answerTokenCount = 0, answerSpeedCount = 0
   
+  // 校对结果统计
+  let evalRateSum = 0, evalCount = 0
+  let evalCorrectCount = 0, evalIncorrectCount = 0
+  
   doneTasks.forEach(t => {
     const m = t.metrics
     if (m.ttft && m.ttft !== '--') {
@@ -2177,6 +2368,19 @@ function calculateAverages(taskId: string) {
       const v = parseFloat(m.answerSpeed)
       if (!isNaN(v)) { answerSpeedSum += v; answerSpeedCount++ }
     }
+    // 校对结果统计 - 只统计成功的轮次
+    if (t.status === 'done' && t.evaluation && t.evaluation.rate !== undefined && t.evaluation.rate !== null) {
+      const rate = parseFloat(t.evaluation.rate)
+      if (!isNaN(rate)) {
+        evalRateSum += rate
+        evalCount++
+        if (rate >= 6) {
+          evalCorrectCount++
+        } else {
+          evalIncorrectCount++
+        }
+      }
+    }
   })
   
   task.avgTtft = ttftCount > 0 ? (ttftSum / ttftCount).toFixed(3) : '--'
@@ -2186,6 +2390,22 @@ function calculateAverages(taskId: string) {
   task.avgThinkTokens = thinkTokenCount > 0 ? Math.round(thinkTokenSum / thinkTokenCount) : '--'
   task.avgAnswerTokens = answerTokenCount > 0 ? Math.round(answerTokenSum / answerTokenCount) : '--'
   task.avgAnswerSpeed = answerSpeedCount > 0 ? (answerSpeedSum / answerSpeedCount).toFixed(1) : '--'
+  
+  // 校对结果平均分
+  if (evalCount > 0) {
+    task.avgEvalRate = evalRateSum / evalCount
+    task.evalCorrectCount = evalCorrectCount
+    task.evalIncorrectCount = evalIncorrectCount
+  } else {
+    task.avgEvalRate = undefined
+    task.evalCorrectCount = 0
+    task.evalIncorrectCount = 0
+  }
+  
+  // 任务完成时设置最终耗时
+  if (task.startTime) {
+    task.duration = now.value - task.startTime
+  }
 }
 
 // Popover
@@ -2359,7 +2579,9 @@ function editCase(caseItem: any) {
   } else {
     caseForm.messages = [{ role: 'user', content: '' }]
   }
-  caseForm.max_tokens = caseItem.max_tokens || 500
+      caseForm.max_tokens = caseItem.max_tokens || 500
+  caseForm.expected_output = caseItem.expected_output || ''
+  caseForm.eval_model = caseItem.eval_model || ''
   
   // 保存当前编辑的用例ID
   currentEditCaseId.value = caseItem.id
@@ -2465,10 +2687,10 @@ async function loadHistory() {
     historyList.value = []
   }
 }
-
 async function viewHistoryDetail(groupId: string) {
   hideHistoryModal()
-  showToast('已加载历史任务组', 'success')
+  // 跳转到历史页面并传递 groupId
+  router.push({ path: '/history', query: { groupId } })
 }
 
 async function deleteHistory(groupId: string) {
@@ -2574,6 +2796,11 @@ function handleEvent(event: any) {
           tasks.value[taskId].sub_tasks[subTaskId].output = data.response
           console.log('[complete] response saved, length:', data.response.length)
         }
+        // 保存校对结果（如果存在）
+        if (data.evaluation) {
+          tasks.value[taskId].sub_tasks[subTaskId].evaluation = data.evaluation
+          console.log('[complete] evaluation saved:', JSON.stringify(data.evaluation))
+        }
         
         // 检查所有轮次是否都已完成
         const subTasks = tasks.value[taskId].sub_tasks
@@ -2593,7 +2820,15 @@ function handleEvent(event: any) {
     case 'summary':
       testRunning.value = false
       testStatus.value = 'DONE'
-      addLog(now, 'FINISH', 'All tests complete')
+      // 获取总耗时
+      const totalDuration = eventData.total_duration_seconds || 0
+      if (totalDuration > 0) {
+        const durationMinutes = Math.floor(totalDuration / 60)
+        const durationSeconds = (totalDuration % 60).toFixed(1)
+        addLog(now, 'FINISH', `All tests complete - 总耗时: ${durationMinutes > 0 ? durationMinutes + '分' : ''}${durationSeconds}秒`)
+      } else {
+        addLog(now, 'FINISH', 'All tests complete')
+      }
       break
       
     case 'error':
@@ -2691,7 +2926,7 @@ async function loadTestState() {
         let doneCount = 0
         let latestRound = 0
         
-        for (const [roundKey, roundData] of Object.entries(rounds)) {
+          for (const [roundKey, roundData] of Object.entries(rounds)) {
           const subId = getSubTaskId(modelName, caseName, parseInt(roundKey))
           
           // 转换 metrics 格式：后端字段名 -> 前端字段名
@@ -2716,7 +2951,8 @@ async function loadTestState() {
             name: `Round ${roundKey}/${totalRounds}`,
             output: roundData.output || '',
             status: roundData.status || 'pending',
-            metrics: metrics
+            metrics: metrics,
+            evaluation: roundData.evaluation || undefined
           }
           
           if (roundData.status === 'done') {
@@ -3769,6 +4005,10 @@ onUnmounted(() => {
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--gray-900);
+  
+  &.duration {
+    color: var(--accent-orange);
+  }
 }
 
 .task-metric-label {
@@ -3842,6 +4082,151 @@ onUnmounted(() => {
   text-transform: uppercase;
   letter-spacing: 0.03em;
   font-weight: 100;
+}
+
+/* 校对结果统计样式 - 与上方一致 */
+.task-result-item.eval-stat {
+  border: none;  /* 移除细线边框 */
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 6px;
+}
+
+.task-result-value.eval-value {
+  color: #000000;
+  font-size: 1rem;
+  
+  &.correct {
+    color: #22C55E;  /* 语义色：Success */
+  }
+  
+  &.incorrect {
+    color: #EF4444;  /* 语义色：Danger */
+  }
+}
+
+/* 校对评分区域 - 紧凑单行显示 */
+.eval-section {
+  min-height: 28px;
+  margin-top: 10px;
+  border-radius: 4px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  transition: all 0.2s ease;
+  
+  /* 有数据时的样式 - 橙色主题 */
+  &.has-data {
+    border: 1px solid #fdba74;
+    background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+    padding: 4px 8px;
+  }
+  
+  /* 无数据时的样式 - 虚线边框 */
+  &:not(.has-data) {
+    border: 1px dashed #fdba74;
+    padding: 4px 8px;
+  }
+}
+
+/* 紧凑单行内联元素 */
+.eval-inline-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.55rem;
+  color: #b45309;
+  font-weight: 500;
+}
+
+.eval-inline-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  font-weight: 700;
+  
+  &.correct {
+    color: #16a34a;
+  }
+  
+  &.incorrect {
+    color: #dc2626;
+  }
+}
+
+.eval-divider {
+  color: #fdba74;
+  font-size: 0.6rem;
+}
+
+.eval-correct {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.55rem;
+  color: #16a34a;
+  font-weight: 600;
+}
+
+.eval-incorrect {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.55rem;
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.eval-accuracy {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem;
+  color: #ea580c;
+  font-weight: 700;
+}
+
+/* 校对统计行 - 一行显示 */
+.eval-stats {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+}
+
+.eval-stat-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem;
+}
+
+.eval-stat-label {
+  color: #666666;  /* 次要线条色 */
+}
+
+.eval-stat-value {
+  font-weight: 600;
+  color: #000000;  /* 主线条色 */
+  
+  &.correct {
+    color: #22C55E;  /* 语义色：Success */
+  }
+  
+  &.incorrect {
+    color: #EF4444;  /* 语义色：Danger */
+  }
+  
+  &.accuracy {
+    color: #FF4500;  /* 强调色：Orange */
+  }
+  
+  /* 行内显示的校对均分样式 */
+  &.eval-inline {
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+}
+
+/* 无数据占位文本 */
+.eval-placeholder-text {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.55rem;
+  color: #b45309;
 }
 
 /* 空状态 */
@@ -4737,6 +5122,71 @@ onUnmounted(() => {
   border-radius: 4px;
   font-size: 0.7rem;
   color: var(--accent-red);
+}
+
+/* 校对结果展示样式 */
+.detail-round-evaluation {
+  margin-top: 8px;
+  padding: 8px;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 6px;
+}
+
+.evaluation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  
+  &.correct {
+    background: rgba(34, 197, 94, 0.15);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    
+    .evaluation-icon {
+      color: #22c55e;
+    }
+    
+    .evaluation-rate {
+      color: #16a34a;
+    }
+  }
+  
+  &.incorrect {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    
+    .evaluation-icon {
+      color: #ef4444;
+    }
+    
+    .evaluation-rate {
+      color: #dc2626;
+    }
+  }
+}
+
+.evaluation-icon {
+  font-size: 0.85rem;
+  font-weight: bold;
+}
+
+.evaluation-label {
+  color: var(--gray-600);
+}
+
+.evaluation-rate {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+}
+
+.evaluation-reason {
+  margin-top: 6px;
+  font-size: 0.65rem;
+  color: var(--gray-600);
+  line-height: 1.4;
 }
 
 /* 输入/输出显示区域 */

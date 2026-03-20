@@ -24,7 +24,13 @@ export interface Task {
   avgAnswerSpeed?: string
   avgThinkTokens?: string
   avgAnswerTokens?: string
+  // 偏离度相关
+  avgDeviation?: string  // 平均偏离度（0-100）
   expanded?: boolean
+  // 耗时相关
+  startTime?: number  // 开始时间戳
+  duration?: number   // 任务总耗时（秒）
+  elapsedTime?: number // 已用时间（秒）
 }
 
 export interface CardPosition {
@@ -119,7 +125,7 @@ export function useTasks() {
     return keys.indexOf(subId)
   }
   
-  function createTask(modelName: string, caseName: string, totalRounds: number = 10) {
+  function createTask(modelName: string, caseName: string, totalRounds: number = 10, startTime?: number) {
     const taskId = getTaskId(modelName, caseName)
     const existingTask = tasks.value[taskId]
     
@@ -130,7 +136,10 @@ export function useTasks() {
       status: 'running',
       current_round: 0,
       total_rounds: totalRounds,
-      sub_tasks: existingTask ? existingTask.sub_tasks : {}
+      sub_tasks: existingTask ? existingTask.sub_tasks : {},
+      startTime: startTime,
+      duration: undefined,
+      elapsedTime: 0
     }
     
     // 预创建所有轮次
@@ -166,7 +175,7 @@ export function useTasks() {
     }
   }
   
-  function updateSubTask(modelName: string, caseName: string, round: number, totalRounds: number, status: string = 'running') {
+  function updateSubTask(modelName: string, caseName: string, round: number, totalRounds: number, status: string = 'running', startTime?: number, elapsedTime?: number) {
     const taskId = getTaskId(modelName, caseName)
     const subId = getSubTaskId(modelName, caseName, round)
     
@@ -178,7 +187,10 @@ export function useTasks() {
         status: 'running',
         current_round: round,
         total_rounds: totalRounds,
-        sub_tasks: {}
+        sub_tasks: {},
+        startTime: startTime,
+        duration: undefined,
+        elapsedTime: elapsedTime || 0
       }
       
       for (let r = 1; r <= totalRounds; r++) {
@@ -192,6 +204,14 @@ export function useTasks() {
       }
     } else {
       tasks.value[taskId].total_rounds = totalRounds
+      
+      // 更新耗时
+      if (startTime !== undefined) {
+        tasks.value[taskId].startTime = startTime
+      }
+      if (elapsedTime !== undefined) {
+        tasks.value[taskId].elapsedTime = elapsedTime
+      }
       
       if (!tasks.value[taskId].sub_tasks[subId]) {
         tasks.value[taskId].sub_tasks[subId] = {
@@ -212,6 +232,10 @@ export function useTasks() {
     const allDone = Object.values(subTasks).every(t => t.status === 'done' || t.status === 'error')
     if (allDone && Object.keys(subTasks).length >= totalRounds) {
       tasks.value[taskId].status = 'done'
+      // 如果任务完成，保存最终耗时
+      if (elapsedTime !== undefined) {
+        tasks.value[taskId].duration = elapsedTime
+      }
       calculateAverages(taskId)
     } else {
       tasks.value[taskId].status = 'running'
@@ -322,6 +346,10 @@ export function useTasks() {
     task.avgAnswerSpeed = undefined
     task.avgThinkTokens = undefined
     task.avgAnswerTokens = undefined
+    task.duration = undefined
+    task.elapsedTime = 0
+    // 重试时重新设置开始时间
+    task.startTime = Date.now() / 1000
   }
   
   function clearTasks() {

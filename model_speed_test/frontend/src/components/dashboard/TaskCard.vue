@@ -41,6 +41,11 @@
         <span>{{ task.current_round || 0 }}/{{ task.total_rounds || 0 }}</span>
         <span>{{ task.progress }}%</span>
       </div>
+      <!-- 预计剩余时间 -->
+      <div v-if="task.status === 'running' && estimatedRemainingDuration !== null" class="task-estimated-time">
+        <span class="estimated-label">预计剩余:</span>
+        <span class="estimated-value">{{ formatDuration(estimatedRemainingDuration) }}</span>
+      </div>
     </div>
     
     <div class="task-content">
@@ -79,6 +84,10 @@
         <div class="task-metric-value">{{ task.total_rounds || 0 }}</div>
         <div class="task-metric-label">总计</div>
       </div>
+      <div class="task-metric">
+        <div class="task-metric-value duration">{{ formatDuration(displayDuration) }}</div>
+        <div class="task-metric-label">耗时</div>
+      </div>
     </div>
     
     <!-- 卡片内的汇总统计（始终显示） -->
@@ -102,12 +111,20 @@
           <div class="task-result-label">Tokens</div>
         </div>
       </div>
+      <!-- 偏离度显示（当存在标准答案时） -->
+      <div v-if="task.avgDeviation" class="task-deviation">
+        <div class="deviation-label">偏离度</div>
+        <div class="deviation-bar">
+          <div class="deviation-fill" :style="{ width: task.avgDeviation + '%' }"></div>
+        </div>
+        <div class="deviation-value">{{ task.avgDeviation }}%</div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 
 interface SubTask {
   name: string
@@ -128,6 +145,12 @@ interface Task {
   avgTpft?: string
   avgTokens?: string
   avgSpeed?: string
+  // 耗时相关
+  startTime?: number
+  duration?: number
+  elapsedTime?: number
+  // 偏离度相关
+  avgDeviation?: string  // 平均偏离度（0-100）
 }
 
 interface Props {
@@ -198,6 +221,71 @@ const cardStyle = computed(() => {
 function getSubTaskIndex(subId: string): number {
   const keys = Object.keys(props.task.sub_tasks)
   return keys.indexOf(subId)
+}
+
+// 实时更新时间
+const now = ref(Date.now() / 1000)
+let timer: number | null = null
+
+onMounted(() => {
+  // 每秒更新时间
+  timer = window.setInterval(() => {
+    now.value = Date.now() / 1000
+  }, 1000)
+})
+
+onUnmounted(() => {
+  if (timer) {
+    clearInterval(timer)
+  }
+})
+
+// 计算显示的耗时
+const displayDuration = computed(() => {
+  if (props.task.status === 'done' && props.task.duration) {
+    // 任务完成时显示最终耗时
+    return props.task.duration
+  }
+  // 运行中或停止时，计算已用时间
+  if (props.task.startTime) {
+    return now.value - props.task.startTime
+  }
+  return 0
+})
+
+// 计算预计总耗时
+const estimatedTotalDuration = computed(() => {
+  // 需要有效的进度和已用时间
+  if (!props.task.progress || props.task.progress <= 0) {
+    return null
+  }
+  const elapsed = displayDuration.value
+  if (!elapsed || elapsed <= 0) {
+    return null
+  }
+  // 预计总耗时 = (已用时间 / 进度) × 100
+  return (elapsed / props.task.progress) * 100
+})
+
+// 计算预计剩余时间
+const estimatedRemainingDuration = computed(() => {
+  const total = estimatedTotalDuration.value
+  if (total === null) {
+    return null
+  }
+  const remaining = total - displayDuration.value
+  return Math.max(0, remaining)
+})
+
+// 格式化耗时
+function formatDuration(seconds: number): string {
+  if (!seconds || seconds < 0) return '--'
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  if (mins > 0) {
+    return `${mins}分${secs}秒`
+  }
+  return `${secs}秒`
 }
 
 function getRoundStatusIcon(status: string, roundNum: number): string {
@@ -413,6 +501,25 @@ function getRoundStatusIcon(status: string, roundNum: number): string {
   justify-content: space-between;
 }
 
+.task-estimated-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  margin-top: 4px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  
+  .estimated-label {
+    color: var(--gray-500);
+  }
+  
+  .estimated-value {
+    color: var(--accent-orange);
+    font-weight: 600;
+  }
+}
+
 .task-content {
   display: flex;
   flex-direction: column;
@@ -534,6 +641,10 @@ function getRoundStatusIcon(status: string, roundNum: number): string {
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--gray-900);
+  
+  &.duration {
+    color: var(--accent-orange);
+  }
 }
 
 .task-metric-label {
@@ -601,5 +712,42 @@ function getRoundStatusIcon(status: string, roundNum: number): string {
   text-transform: uppercase;
   letter-spacing: 0.03em;
   font-weight: 100;
+}
+
+/* 偏离度显示样式 */
+.task-deviation {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(249, 115, 22, 0.3);
+}
+
+.deviation-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem;
+  color: #6b7280;
+  margin-bottom: 6px;
+}
+
+.deviation-bar {
+  height: 6px;
+  background: var(--gray-200);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.deviation-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #22c55e 0%, #eab308 50%, #ef4444 100%);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.deviation-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1f2937;
+  margin-top: 4px;
+  text-align: right;
 }
 </style>

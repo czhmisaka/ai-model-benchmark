@@ -240,11 +240,16 @@ class TestEventEmitter:
         # 生成 group_id
         group_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # 初始化所有任务状态
+        # 记录测试开始时间（用于计算总耗时）
+        test_start_time = time.time()
+        self._test_start_time = test_start_time
+        
+        # 初始化所有任务状态，记录每个任务的开始时间
         self._tasks = {}
         for model_name in models:
             for test_case_name in test_cases:
-                self._get_or_create_task(model_name, test_case_name, total_rounds)
+                task = self._get_or_create_task(model_name, test_case_name, total_rounds)
+                task["start_time"] = test_start_time  # 添加任务开始时间
         
         # 保存到数据库
         if self._use_db and self._db:
@@ -267,7 +272,8 @@ class TestEventEmitter:
                 "models": models,
                 "test_cases": test_cases,
                 "total_rounds": total_rounds,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "start_time": test_start_time  # 传递开始时间给前端
             }
         ))
         
@@ -292,6 +298,12 @@ class TestEventEmitter:
         
         # 当前任务的进度
         task_progress = int((current_round / total_rounds) * 100)
+        
+        # 计算当前任务已用时间
+        task_id = self._get_task_id(model_name, test_case_name)
+        task = self._tasks.get(task_id, {})
+        start_time = task.get("start_time", time.time())
+        elapsed_time = time.time() - start_time
 
         await self.emit(TestEvent(
             event_type="progress",
@@ -302,7 +314,8 @@ class TestEventEmitter:
                 "total_rounds": total_rounds,
                 "status": status,
                 "prompt": prompt,
-                "percent": task_progress
+                "percent": task_progress,
+                "elapsed_seconds": elapsed_time  # 传递任务已用时间
             }
         ))
 
@@ -346,7 +359,8 @@ class TestEventEmitter:
         total_rounds: int = 10,
         group_id: str = None,
         prompt: str = None,
-        response: str = None
+        response: str = None,
+        evaluation: Dict[str, Any] = None
     ):
         """发射单次测试完成事件"""
         # 更新任务状态 - 保存完整输出
@@ -358,13 +372,20 @@ class TestEventEmitter:
         if round_key in task["rounds"]:
             output_text = task["rounds"][round_key].get("output", "")
         
-        # 更新任务状态
+        # 更新任务状态（包含校对结果）
         if round_key in task["rounds"]:
             task["rounds"][round_key]["status"] = "done" if success else "error"
             task["rounds"][round_key]["metrics"] = metrics.to_dict() if hasattr(metrics, 'to_dict') else metrics
+            # 保存校对结果
+            if evaluation:
+                task["rounds"][round_key]["evaluation"] = evaluation
         
-        # 保存结果
-        self._test_results.append({
+        # 计算任务总耗时
+        start_time = task.get("start_time", time.time())
+        total_duration = time.time() - start_time
+        
+        # 保存结果（包含校对结果）
+        result_entry = {
             "model_name": model_name,
             "test_case_name": test_case_name,
             "metrics": metrics,
@@ -373,7 +394,10 @@ class TestEventEmitter:
             "total_rounds": total_rounds,
             "output": output_text,  # 保存完整输出
             "timestamp": datetime.now().isoformat()
-        })
+        }
+        if evaluation:
+            result_entry["evaluation"] = evaluation
+        self._test_results.append(result_entry)
 
         # 更新完成计数
         if self._current_test:
@@ -395,7 +419,8 @@ class TestEventEmitter:
                     success=success,
                     prompt=prompt,
                     response=output_text,
-                    output_text=output_text
+                    output_text=output_text,
+                    evaluation=evaluation  # 传递校对结果
                 )
                 print(f"[Emitter] 已保存测试结果: {group_id} - {model_name} - R{current_round}")
                 
@@ -415,7 +440,9 @@ class TestEventEmitter:
                 "current_round": current_round,
                 "total_rounds": total_rounds,
                 "prompt": prompt or "",
-                "response": response or ""
+                "response": response or "",
+                "total_duration_seconds": total_duration,  # 传递任务总耗时
+                "evaluation": evaluation  # 传递校对结果
             }
         ))
         
@@ -452,6 +479,12 @@ class TestEventEmitter:
 
     async def emit_summary(self, group_id: str = None):
         """发射汇总事件"""
+        # 计算总耗时
+        total_duration = 0
+        if hasattr(self, '_test_start_time') and self._test_start_time:
+            total_duration = time.time() - self._test_start_time
+            print(f"[Emitter] 测试总耗时: {total_duration:.2f}秒")
+        
         # 更新测试组状态
         if self._use_db and self._db and group_id:
             try:
@@ -468,9 +501,10 @@ class TestEventEmitter:
                     status="completed",
                     completed_rounds=completed_rounds,
                     success_count=success_count,
-                    failed_count=failed_count
+                    failed_count=failed_count,
+                    total_duration_seconds=total_duration
                 )
-                print(f"[Emitter] 已更新测试组状态: {group_id}, 完成: {completed_rounds}, 成功: {success_count}, 失败: {failed_count}")
+                print(f"[Emitter] 已更新测试组状态: {group_id}, 完成: {completed_rounds}, 成功: {success_count}, 失败: {failed_count}, 总耗时: {total_duration:.2f}秒")
             except Exception as e:
                 print(f"[Emitter] 更新测试组状态失败: {e}")
         
@@ -479,6 +513,7 @@ class TestEventEmitter:
             data={
                 "group_id": group_id,
                 "results": self._test_results,
+                "total_duration_seconds": total_duration,
                 "timestamp": datetime.now().isoformat()
             }
         ))

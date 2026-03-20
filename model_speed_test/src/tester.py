@@ -142,6 +142,11 @@ class ModelTester:
         
         print(f"\n🔄 正在等待响应...")
         
+        # 分别追踪 think 和 answer 内容
+        think_content = ""
+        answer_content = ""
+        is_in_think = False
+        
         try:
             async for chunk in self.client.chat_stream(
                 prompt=prompt,
@@ -157,6 +162,17 @@ class ModelTester:
                     "is_think": chunk.is_think,
                     "is_think_end": chunk.is_think_end
                 })
+                
+                # 分别记录 think 和 answer 内容
+                if chunk.is_think:
+                    think_content += chunk.content
+                    is_in_think = True
+                else:
+                    # 当 think 结束，开始记录 answer
+                    if is_in_think and not chunk.is_think:
+                        is_in_think = False
+                    answer_content += chunk.content
+                
                 full_content += chunk.content
                 
         except Exception as e:
@@ -197,13 +213,15 @@ class ModelTester:
             input_tokens=input_tokens
         )
         
-        # 记录结果
+        # 记录结果（包含分离的 think 和 answer 内容）
         self.recorder.record(
             model_name=self.client.name,
             prompt=display_prompt,
             response=full_content,
             metrics=metrics.to_dict(),
-            metadata={"test_type": "stream", "messages_count": len(messages) if messages else 0}
+            metadata={"test_type": "stream", "messages_count": len(messages) if messages else 0},
+            think_content=think_content if think_content else None,
+            answer_content=answer_content if answer_content else None
         )
         
         # 输出 Output

@@ -28,7 +28,6 @@ from src.client import ModelClient, StreamChunk
 from src.tester import ModelTester, ConcurrentTester
 from src.recorder import IORecorder
 from src.metrics import MetricsCalculator
-from src.evaluation_manager import EvaluationManager, DEFAULT_EVAL_MODEL
 
 
 def setup_logging(level: str = "INFO"):
@@ -101,6 +100,10 @@ def load_config(config_path: str = "config/config.json") -> Dict[str, Any]:
                     config["output"] = json.loads(row["value"])
                 elif row["key"] == "thresholds":
                     config["thresholds"] = json.loads(row["value"])
+                elif row["key"] == "test_cases":
+                    config["test_cases"] = json.loads(row["value"])
+                elif row["key"] == "models":
+                    config["models"] = json.loads(row["value"])
             conn.close()
         except Exception as e:
             print(f"从数据库读取配置失败: {e}")
@@ -110,6 +113,19 @@ def load_config(config_path: str = "config/config.json") -> Dict[str, Any]:
     if not config:
         print(f"配置文件不存在: {config_file}")
         sys.exit(1)
+    
+    # 调试：打印加载的配置信息
+    print(f"✅ 配置加载完成")
+    print(f"   - 模型数量: {len(config.get('models', []))}")
+    print(f"   - 测试用例数量: {len(config.get('test_cases', []))}")
+    
+    # 调试：检查是否有测试用例配置了校对功能
+    test_cases_with_eval = [tc for tc in config.get('test_cases', []) 
+                           if tc.get('eval_model') and tc.get('expected_output')]
+    if test_cases_with_eval:
+        print(f"   - 需要校对的测试用例数量: {len(test_cases_with_eval)}")
+        for tc in test_cases_with_eval:
+            print(f"     • {tc.get('name')}: eval_model={tc.get('eval_model')}")
     
     return config
 
@@ -165,46 +181,72 @@ def get_test_suite_test_cases(config: Dict[str, Any]) -> List[Dict]:
 
 
 def create_clients(config: Dict[str, Any], model_names: List[str] = None) -> List[ModelClient]:
-    """创建模型客户端"""
+    """创建模型客户端
+    
+    支持两种模式：
+    1. 使用原有的 ModelClient（旧版兼容）
+    2. 使用新的 Provider 系统（支持多 Provider）
+    """
     clients = []
     
     models = get_enabled_models(config, model_names)
     
     for model in models:
-        client = ModelClient(
-            name=model["name"],
-            endpoint=model["endpoint"],
-            api_key=model["api_key"],
-            model=model["model"]
-        )
-        clients.append(client)
+        provider = model.get("provider", "openai")
+        
+        # 尝试使用新的 Provider 系统
+        try:
+            from src.client_adapter import ProviderAdapter
+            adapter = ProviderAdapter(
+                name=model["name"],
+                provider=provider,
+                endpoint=model["endpoint"],
+                api_key=model["api_key"],
+                model=model["model"],
+                temperature=model.get("temperature", 0.7),
+                top_p=model.get("top_p", 1.0),
+                max_tokens=model.get("max_tokens", 4096),
+                presence_penalty=model.get("presence_penalty", 0.0),
+                frequency_penalty=model.get("frequency_penalty", 0.0),
+                thinking_enabled=model.get("thinking_enabled", True)
+            )
+            # 将适配器包装为兼容 ModelClient 的接口
+            clients.append(adapter)
+            print(f"✅ 使用 Provider [{provider}] 创建客户端: {model['name']}")
+        except ImportError:
+            # 如果 Provider 导入失败，回退到原有的 ModelClient
+            print(f"⚠️ Provider [{provider}] 不可用，回退到 ModelClient: {model['name']}")
+            client = ModelClient(
+                name=model["name"],
+                endpoint=model["endpoint"],
+                api_key=model["api_key"],
+                model=model["model"],
+                temperature=model.get("temperature", 0.7),
+                top_p=model.get("top_p", 1.0),
+                max_tokens=model.get("max_tokens", 4096),
+                presence_penalty=model.get("presence_penalty", 0.0),
+                frequency_penalty=model.get("frequency_penalty", 0.0),
+                thinking_enabled=model.get("thinking_enabled", True)
+            )
+            clients.append(client)
+        except Exception as e:
+            # 其他错误，回退到原有的 ModelClient
+            print(f"⚠️ Provider [{provider}] 创建失败: {e}，回退到 ModelClient")
+            client = ModelClient(
+                name=model["name"],
+                endpoint=model["endpoint"],
+                api_key=model["api_key"],
+                model=model["model"],
+                temperature=model.get("temperature", 0.7),
+                top_p=model.get("top_p", 1.0),
+                max_tokens=model.get("max_tokens", 4096),
+                presence_penalty=model.get("presence_penalty", 0.0),
+                frequency_penalty=model.get("frequency_penalty", 0.0),
+                thinking_enabled=model.get("thinking_enabled", True)
+            )
+            clients.append(client)
     
     return clients
-
-
-async def run_evaluation(
-    eval_manager: EvaluationManager,
-    prompt: str,
-    model_output: str,
-    test_case: Dict[str, Any]
-) -> Optional[Dict[str, Any]]:
-    """运行评估（如果启用）"""
-    eval_config = eval_manager.get_evaluation_config(test_case)
-    if not eval_config:
-        return None
-    
-    print(f"\n  📊 正在进行质量评估...")
-    eval_result = await eval_manager.evaluate_output(
-        prompt=prompt,
-        model_output=model_output,
-        evaluation_config=eval_config
-    )
-    
-    if eval_result:
-        print(f"  📊 评估结果: {eval_result.get('result', 0)}/100")
-        print(f"  📊 是否通过: {'✅ 是' if eval_result.get('success') else '❌ 否'}")
-    
-    return eval_result
 
 
 async def run_single_test(
@@ -212,8 +254,7 @@ async def run_single_test(
     recorder: IORecorder,
     test_case: Dict[str, Any],
     rounds: int,
-    interval: float,
-    eval_manager: EvaluationManager = None
+    interval: float
 ) -> Dict[str, Any]:
     """运行单个测试用例"""
     prompt = test_case.get("prompt")
@@ -298,12 +339,7 @@ async def run_tests(
     shutdown_event: asyncio.Event = None
 ):
     """运行测试 - 支持多测试用例遍历"""
-    # 初始化记录器
-    output_config = config.get("output", {})
-    recorder = IORecorder(
-        results_dir=output_config.get("results_dir", "results"),
-        save_detailed=output_config.get("save_detailed_logs", True)
-    )
+    from datetime import datetime
     
     # 测试配置
     conc_config = config.get("concurrency", {})
@@ -314,7 +350,6 @@ async def run_tests(
     if test_cases is None or len(test_cases) == 0:
         test_cases = get_test_suite_test_cases(config)
         if not test_cases:
-            # 默认测试用例
             test_cases = [{
                 "name": "默认测试",
                 "prompt": "你好",
@@ -324,6 +359,27 @@ async def run_tests(
                 "messages": None,
                 "system_prompt": None
             }]
+    
+    # 生成任务标识
+    group_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    task_name = f"{len(clients)}models_{len(test_cases)}cases"
+    
+    # 初始化记录器
+    output_config = config.get("output", {})
+    recorder = IORecorder(
+        results_dir=output_config.get("results_dir", "results"),
+        save_detailed=output_config.get("save_detailed_logs", True),
+        group_id=group_id,
+        task_name=task_name,
+        total_rounds=rounds,
+        config={
+            "models": [c.name for c in clients],
+            "test_cases": [tc.get("name") for tc in test_cases],
+            "rounds": rounds
+        }
+    )
+    
+    print(f"\n📁 测试记录目录: {recorder.task_dir}")
     
     # 显示总体测试信息
     print(f"\n{'='*60}")
@@ -345,14 +401,13 @@ async def run_tests(
             )
             client_results.append(result)
         
-            # 汇总该模型的所有测试结果
-            all_results[client.name] = client_results
-            
-            # 关闭客户端连接
-            try:
-                await client.close()
-            except Exception as e:
-                print(f"  关闭客户端时出错: {e}")
+        all_results[client.name] = client_results
+        
+        # 关闭客户端连接
+        try:
+            await client.close()
+        except Exception as e:
+            print(f"  关闭客户端时出错: {e}")
     
     # 输出汇总
     print(f"\n{'='*60}")
@@ -379,29 +434,13 @@ async def run_tests(
                 if result.get("error"):
                     print(f"    错误: {result['error']}")
     
-    # 保存汇总结果
-    summary_file = Path(output_config.get("results_dir", "results")) / "summary.json"
-    # 转换为可JSON序列化的格式
-    serializable_results = {}
-    for model_name, results in all_results.items():
-        serializable_results[model_name] = []
-        for result in results:
-            serializable_results[model_name].append({
-                "test_case": result.get("test_case"),
-                "success": result["success"],
-                "metrics": result.get("metrics"),
-                "error": result.get("error")
-            })
-    
-    with open(summary_file, "w", encoding="utf-8") as f:
-        json.dump(serializable_results, f, ensure_ascii=False, indent=2)
-    
-    print(f"\n汇总结果已保存到: {summary_file}")
+    # 完成记录
+    recorder.finalize()
     
     # 导出CSV
     csv_path = recorder.export_csv()
     if csv_path:
-        print(f"CSV记录已保存到: {csv_path}")
+        print(f"\nCSV记录已保存到: {csv_path}")
 
 
 def list_test_cases(config: Dict[str, Any]):
@@ -467,11 +506,19 @@ def signal_handler(signum, frame):
 class WebAwareTester:
     """支持 Web 推送的测试运行器"""
     
-    def __init__(self, enable_web: bool = True, group_id: str = None, stop_event: asyncio.Event = None, timeout: float = 300.0):
+    def __init__(
+        self, 
+        enable_web: bool = True, 
+        group_id: str = None, 
+        stop_event: asyncio.Event = None, 
+        timeout: float = 300.0,
+        eval_model_config: Dict[str, Any] = None
+    ):
         self.enable_web = enable_web
         self.group_id = group_id
         self.stop_event = stop_event
         self.timeout = timeout  # 超时时间（秒），默认300秒
+        self.eval_model_config = eval_model_config  # 校对模型配置
     
     def should_stop(self) -> bool:
         """检查是否应该停止"""
@@ -500,6 +547,15 @@ class WebAwareTester:
         system_prompt = test_case.get("system_prompt")
         test_case_name = test_case.get("name", "未命名")
         
+        # 获取校对相关配置
+        eval_model = test_case.get("eval_model")  # 校对模型名称
+        expected_output = test_case.get("expected_output")  # 标准答案
+        
+        # 检查是否需要校对
+        needs_verification = bool(eval_model and expected_output)
+        if needs_verification:
+            print(f"📋 校对配置: eval_model={eval_model}, expected_output已配置")
+        
         test_config = {
             "max_tokens": test_case.get("max_tokens", 500),
             "temperature": test_case.get("temperature", 0.7),
@@ -518,6 +574,8 @@ class WebAwareTester:
         
         print(f"\n>>> 测试模型: {client.name}")
         print(f"测试用例: {test_case_name}")
+        if needs_verification:
+            print(f"📋 需要校对验证")
         
         # 确定用于显示的 prompt
         display_prompt = prompt or (messages[-1]["content"] if messages else "")
@@ -539,7 +597,8 @@ class WebAwareTester:
         if test_config.get("stream", True):
             result = await self._run_stream_test_with_events(
                 tester, client.name, display_prompt, 
-                messages, system_prompt, rounds, interval, test_case_name
+                messages, system_prompt, rounds, interval, test_case_name,
+                eval_model=eval_model, expected_output=expected_output
             )
         else:
             result = await tester.run_test_rounds(
@@ -561,10 +620,119 @@ class WebAwareTester:
         system_prompt: str,
         rounds: int,
         interval: float,
-        test_case_name: str
+        test_case_name: str,
+        eval_model: str = None,
+        expected_output: str = None
     ):
         """流式测试并推送事件（带超时控制）"""
         results = []
+        
+        # 检查是否需要校对
+        needs_verification = bool(eval_model and expected_output)
+        eval_client = None
+        
+        # 如果需要校对，创建校对客户端
+        if needs_verification and self.eval_model_config:
+            try:
+                # 从模型列表中找到校对模型对应的配置
+                eval_model_cfg = None
+                models_list = self.eval_model_config.get("models", [])
+                for m in models_list:
+                    if m.get("name") == eval_model:
+                        eval_model_cfg = m
+                        break
+
+                if eval_model_cfg:
+                    eval_provider = eval_model_cfg.get("provider", "openai")
+                    try:
+                        # 尝试使用 ProviderAdapter
+                        from src.client_adapter import ProviderAdapter
+                        eval_client = ProviderAdapter(
+                            name=eval_model,
+                            provider=eval_provider,
+                            endpoint=eval_model_cfg.get("endpoint"),
+                            api_key=eval_model_cfg.get("api_key"),
+                            model=eval_model_cfg.get("model", ""),
+                            temperature=0.3,  # 校对时使用较低温度
+                            top_p=1.0,
+                            max_tokens=2048,
+                            presence_penalty=0.0,
+                            frequency_penalty=0.0,
+                            thinking_enabled=False  # 校对时禁用思考
+                        )
+                        print(f"✅ 已创建校对客户端: {eval_model} (provider={eval_provider})")
+                    except (ValueError, ImportError) as adapter_err:
+                        # ProviderAdapter 失败时，回退到使用 ModelClient
+                        print(f"⚠️ ProviderAdapter 创建失败 ({adapter_err})，回退到 ModelClient")
+                        try:
+                            from src.client import ModelClient
+                            eval_client = ModelClient(
+                                name=eval_model,
+                                endpoint=eval_model_cfg.get("endpoint"),
+                                api_key=eval_model_cfg.get("api_key"),
+                                model=eval_model_cfg.get("model", eval_model),
+                                temperature=0.3,
+                                top_p=1.0,
+                                max_tokens=2048,
+                                presence_penalty=0.0,
+                                frequency_penalty=0.0,
+                                thinking_enabled=False
+                            )
+                            print(f"✅ 已创建校对客户端 (ModelClient): {eval_model}")
+                        except Exception as model_err:
+                            print(f"⚠️ ModelClient 创建也失败: {model_err}")
+                            eval_client = None
+                else:
+                    print(f"⚠️ 未找到校对模型配置: {eval_model}，尝试使用默认配置")
+                    # 如果没找到，尝试使用第一个模型作为校对模型
+                    if models_list:
+                        eval_model_cfg = models_list[0]
+                        eval_provider = eval_model_cfg.get("provider", "openai")
+                        try:
+                            from src.client_adapter import ProviderAdapter
+                            eval_client = ProviderAdapter(
+                                name=eval_model,
+                                provider=eval_provider,
+                                endpoint=eval_model_cfg.get("endpoint"),
+                                api_key=eval_model_cfg.get("api_key"),
+                                model=eval_model_cfg.get("model", ""),
+                                temperature=0.3,
+                                top_p=1.0,
+                                max_tokens=2048,
+                                presence_penalty=0.0,
+                                frequency_penalty=0.0,
+                                thinking_enabled=False
+                            )
+                            print(f"✅ 使用默认模型 {eval_model_cfg.get('name')} 作为校对模型")
+                        except (ValueError, ImportError):
+                            print(f"⚠️ ProviderAdapter 创建失败，回退到 ModelClient")
+                            try:
+                                from src.client import ModelClient
+                                eval_client = ModelClient(
+                                    name=eval_model,
+                                    endpoint=eval_model_cfg.get("endpoint"),
+                                    api_key=eval_model_cfg.get("api_key"),
+                                    model=eval_model_cfg.get("model", eval_model_cfg.get("name")),
+                                    temperature=0.3,
+                                    top_p=1.0,
+                                    max_tokens=2048,
+                                    presence_penalty=0.0,
+                                    frequency_penalty=0.0,
+                                    thinking_enabled=False
+                                )
+                                print(f"✅ 使用默认模型 {eval_model_cfg.get('name')} 作为校对模型 (ModelClient)")
+                            except Exception as model_err:
+                                print(f"⚠️ ModelClient 创建也失败: {model_err}")
+                                eval_client = None
+                        except Exception as e:
+                            print(f"⚠️ 创建校对客户端失败: {e}")
+                            eval_client = None
+            except Exception as e:
+                print(f"⚠️ 创建校对客户端失败: {e}")
+                eval_client = None
+        elif needs_verification and self.eval_manager:
+            # 使用评估管理器中的客户端
+            eval_client = self.eval_manager.eval_client
         
         for i in range(rounds):
             # 检查是否收到停止信号
@@ -766,6 +934,35 @@ class WebAwareTester:
                       f"总耗时: {metrics.total_time:.3f}s, 输出Token: {metrics.output_tokens}, "
                       f"速度: {output_speed:.2f} tokens/s")
                 
+                # 校对验证（如果配置了）
+                evaluation_result = None
+                if needs_verification and eval_client:
+                    try:
+                        from src.evaluation_service import EvaluationService
+                        eval_service = EvaluationService(eval_client)
+                        print(f"  📋 正在进行校对验证...")
+                        evaluation_result = await eval_service.verify(
+                            prompt=display_prompt,
+                            model_output=full_content,
+                            golden_answer=expected_output
+                        )
+                        if evaluation_result:
+                            is_correct = evaluation_result.get("is_correct", False)
+                            rate = evaluation_result.get("rate", 0)
+                            reason = evaluation_result.get("reason", "")
+                            print(f"  📋 校对结果: {'✅ 正确' if is_correct else '❌ 不正确'}, 评分: {rate}/10")
+                            if reason:
+                                print(f"  📋 评价: {reason[:100]}...")
+                        else:
+                            print(f"  ⚠️ 校对失败，未获取到结果")
+                    except Exception as eval_err:
+                        print(f"  ⚠️ 校对失败: {eval_err}")
+                        evaluation_result = {
+                            "is_correct": False,
+                            "rate": 0,
+                            "reason": f"校对异常: {str(eval_err)}"
+                        }
+                
                 # 推送完成事件
                 if self.enable_web:
                     await test_emitter.emit_complete(
@@ -777,7 +974,8 @@ class WebAwareTester:
                         success=True,
                         group_id=self.group_id,
                         prompt=display_prompt,
-                        response=full_content
+                        response=full_content,
+                        evaluation=evaluation_result
                     )
                     
             except Exception as e:
@@ -858,31 +1056,46 @@ async def run_concurrent_tests(
 ):
     """运行增强的并发测试 - 多模型+多轮并发"""
     from src.tester import ConcurrentTester
+    from datetime import datetime
     
     conc_config = config.get("concurrency", {})
     max_concurrent = conc_config.get("max_concurrent", 3)
     rounds = conc_config.get("test_rounds", 10)
     interval = conc_config.get("interval", 1)
     
-    print(f"\n{'='*60}")
-    print(f"AI模型速度测试 (增强并发模式)")
-    print(f"{'='*60}")
-    print(f"模型数量: {len(clients)}个")
-    print(f"每轮并发数: {max_concurrent}")
-    print(f"测试轮次: {rounds}")
-    print(f"每轮间隔: {interval}s")
-    print(f"{'='*60}\n")
+    # 获取测试用例
+    if not test_cases:
+        test_cases = get_test_suite_test_cases(config)
+    
+    # 生成任务标识
+    group_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    task_name = f"{len(clients)}models_{len(test_cases)}cases"
     
     # 初始化记录器
     output_config = config.get("output", {})
     recorder = IORecorder(
         results_dir=output_config.get("results_dir", "results"),
-        save_detailed=output_config.get("save_detailed_logs", True)
+        save_detailed=output_config.get("save_detailed_logs", True),
+        group_id=group_id,
+        task_name=task_name,
+        total_rounds=rounds,
+        config={
+            "models": [c.name for c in clients],
+            "test_cases": [tc.get("name") for tc in test_cases],
+            "rounds": rounds,
+            "concurrency": max_concurrent
+        }
     )
     
-    # 获取测试用例
-    if not test_cases:
-        test_cases = get_test_suite_test_cases(config)
+    print(f"\n{'='*60}")
+    print(f"AI模型速度测试 (增强并发模式)")
+    print(f"{'='*60}")
+    print(f"📁 测试记录目录: {recorder.task_dir}")
+    print(f"模型数量: {len(clients)}个")
+    print(f"每轮并发数: {max_concurrent}")
+    print(f"测试轮次: {rounds}")
+    print(f"每轮间隔: {interval}s")
+    print(f"{'='*60}\n")
     
     # 为每个测试用例创建并发测试
     for test_case in test_cases:
@@ -944,6 +1157,9 @@ async def run_concurrent_tests(
     print(f"\n{'='*60}")
     print("增强并发测试完成")
     print(f"{'='*60}")
+    
+    # 完成记录
+    recorder.finalize()
 
 
 async def run_tests_with_web(
@@ -954,10 +1170,27 @@ async def run_tests_with_web(
     stop_event: asyncio.Event = None
 ):
     """运行测试 - 支持 Web 推送"""
+    from datetime import datetime
+    
     # 测试配置
     conc_config = config.get("concurrency", {})
     rounds = conc_config.get("test_rounds", 10)
     interval = conc_config.get("interval", 1)
+    max_concurrent = conc_config.get("max_concurrent", 3)
+    
+    # 获取测试用例列表
+    if test_cases is None or len(test_cases) == 0:
+        test_cases = get_test_suite_test_cases(config)
+        if not test_cases:
+            test_cases = [{
+                "name": "默认测试",
+                "prompt": "你好",
+                "max_tokens": 500,
+                "temperature": 0.7,
+                "stream": True,
+                "messages": None,
+                "system_prompt": None
+            }]
     
     # 用于存储 group_id
     group_id = None
@@ -977,6 +1210,10 @@ async def run_tests_with_web(
         # emit_start 现在返回 group_id
         group_id = await test_emitter.emit_start(start_config)
     
+    # 生成任务标识
+    task_group_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    task_name = f"{len(clients)}models_{len(test_cases)}cases"
+    
     # 检查是否收到停止信号
     def should_stop() -> bool:
         if stop_event and stop_event.is_set():
@@ -991,35 +1228,39 @@ async def run_tests_with_web(
     output_config = config.get("output", {})
     recorder = IORecorder(
         results_dir=output_config.get("results_dir", "results"),
-        save_detailed=output_config.get("save_detailed_logs", True)
+        save_detailed=output_config.get("save_detailed_logs", True),
+        group_id=task_group_id,
+        task_name=task_name,
+        total_rounds=rounds,
+        config={
+            "models": [c.name for c in clients],
+            "test_cases": [tc.get("name") for tc in test_cases],
+            "rounds": rounds,
+            "concurrency": max_concurrent
+        }
     )
-    
-    # 获取测试用例列表
-    if test_cases is None or len(test_cases) == 0:
-        test_cases = get_test_suite_test_cases(config)
-        if not test_cases:
-            test_cases = [{
-                "name": "默认测试",
-                "prompt": "你好",
-                "max_tokens": 500,
-                "temperature": 0.7,
-                "stream": True,
-                "messages": None,
-                "system_prompt": None
-            }]
     
     print(f"\n{'='*60}")
     print(f"AI模型速度测试 (Web模式)")
     print(f"{'='*60}")
+    print(f"📁 测试记录目录: {recorder.task_dir}")
     print(f"测试用例数量: {len(test_cases)}个")
     print(f"每个测试轮次: {rounds}轮")
     if enable_web:
         print(f"Web界面: http://localhost:15010")
     print(f"{'='*60}\n")
     
-    all_results = {}
-    web_tester = WebAwareTester(enable_web=enable_web, group_id=group_id, stop_event=stop_event)
+    # 获取模型配置列表（包含所有模型的配置，用于校对时查找）
+    models_config = config.get("models", [])
     
+    # 传递模型列表配置，以便 WebAwareTester 能根据 eval_model 名称找到对应配置
+    web_tester = WebAwareTester(
+        enable_web=enable_web, 
+        group_id=group_id, 
+        stop_event=stop_event,
+        eval_model_config={"models": models_config}  # 传递模型列表供校对时查找
+    )
+
     # 获取最大并发数
     max_concurrent = conc_config.get("max_concurrent", 3)
     
@@ -1034,10 +1275,17 @@ async def run_tests_with_web(
                 name=client_model["name"],
                 endpoint=client_model["endpoint"],
                 api_key=client_model["api_key"],
-                model=client_model["model"]
+                model=client_model["model"],
+                temperature=client_model.get("temperature", 0.7),
+                top_p=client_model.get("top_p", 1.0),
+                max_tokens=client_model.get("max_tokens", 4096),
+                presence_penalty=client_model.get("presence_penalty", 0.0),
+                frequency_penalty=client_model.get("frequency_penalty", 0.0),
+                thinking_enabled=client_model.get("thinking_enabled", True)
             )
             try:
                 if enable_web:
+                    # 传递 test_case 中的校对配置（eval_model 名称）给 web_tester
                     results = await web_tester.run_single_test_with_events(
                         test_client, recorder, test_case, rounds, interval
                     )
@@ -1126,6 +1374,9 @@ async def run_tests_with_web(
         json.dump(serializable_results, f, ensure_ascii=False, indent=2)
     
     print(f"\n汇总结果已保存到: {summary_file}")
+    
+    # 完成记录
+    recorder.finalize()
 
 
 def start_web_server(port: int = 15010):

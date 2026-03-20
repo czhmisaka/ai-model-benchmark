@@ -2,6 +2,7 @@ import { ref } from 'vue'
 
 export interface Model {
   name: string
+  provider?: string
   endpoint: string
   api_key: string
   model: string
@@ -21,6 +22,9 @@ export interface TestCase {
   max_tokens: number
   temperature?: number
   stream?: boolean
+  // 标准答案相关
+  expected_output?: string  // 标准答案（可选）
+  eval_model?: string       // 校对模型名称（可选）
 }
 
 export interface Config {

@@ -51,6 +51,7 @@ class TestDatabase:
                 completed_rounds INTEGER DEFAULT 0,
                 success_count INTEGER DEFAULT 0,
                 failed_count INTEGER DEFAULT 0,
+                total_duration_seconds REAL DEFAULT 0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -83,6 +84,18 @@ class TestDatabase:
         # 如果 output_text 列不存在，则添加（数据库迁移）
         try:
             cursor.execute("ALTER TABLE test_results ADD COLUMN output_text TEXT")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+        
+        # 如果 total_duration_seconds 列不存在，则添加（数据库迁移）
+        try:
+            cursor.execute("ALTER TABLE test_groups ADD COLUMN total_duration_seconds REAL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+        
+        # 如果 evaluation_json 列不存在，则添加（数据库迁移 - 校对结果）
+        try:
+            cursor.execute("ALTER TABLE test_results ADD COLUMN evaluation_json TEXT")
         except sqlite3.OperationalError:
             pass  # 列已存在
         
@@ -154,7 +167,8 @@ class TestDatabase:
         status: str = None,
         completed_rounds: int = None,
         success_count: int = None,
-        failed_count: int = None
+        failed_count: int = None,
+        total_duration_seconds: float = None
     ):
         """更新测试组状态"""
         conn = self._get_connection()
@@ -178,6 +192,9 @@ class TestDatabase:
         if failed_count is not None:
             updates.append("failed_count = ?")
             params.append(failed_count)
+        if total_duration_seconds is not None:
+            updates.append("total_duration_seconds = ?")
+            params.append(total_duration_seconds)
         
         if updates:
             params.append(group_id)
@@ -260,7 +277,8 @@ class TestDatabase:
         error_message: str = None,
         prompt: str = None,
         response: str = None,
-        output_text: str = None
+        output_text: str = None,
+        evaluation: Dict[str, Any] = None
     ) -> int:
         """
         添加测试结果
@@ -276,6 +294,7 @@ class TestDatabase:
             prompt: 输入提示（可选，截断保存）
             response: 模型响应（可选，截断保存）
             output_text: 完整输出文本（可选，完整保存）
+            evaluation: 校对结果（可选），包含 is_correct, rate, reason
             
         Returns:
             记录ID
@@ -290,13 +309,17 @@ class TestDatabase:
         # 保存完整输出文本
         full_output = output_text if output_text else response
         
+        # 保存校对结果（序列化为 JSON）
+        evaluation_json = json.dumps(evaluation, ensure_ascii=False) if evaluation else None
+        
         cursor.execute("""
             INSERT INTO test_results (
                 group_id, model_name, test_case_name, round_number,
                 ttft_seconds, tpft_seconds, total_time_seconds,
                 input_tokens, output_tokens, tokens_per_second, total_tokens_per_second,
-                success, error_message, prompt_preview, response_preview, output_text, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                success, error_message, prompt_preview, response_preview, output_text, timestamp,
+                evaluation_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             group_id,
             model_name,
@@ -314,7 +337,8 @@ class TestDatabase:
             prompt_preview,
             response_preview,
             full_output,
-            datetime.now().isoformat()
+            datetime.now().isoformat(),
+            evaluation_json
         ))
         
         conn.commit()
@@ -337,7 +361,21 @@ class TestDatabase:
         rows = cursor.fetchall()
         conn.close()
         
-        return [dict(row) for row in rows]
+        # 转换结果并解析 evaluation_json
+        results = []
+        for row in rows:
+            result = dict(row)
+            # 解析 evaluation_json 字段
+            if result.get("evaluation_json"):
+                try:
+                    result["evaluation"] = json.loads(result["evaluation_json"])
+                except json.JSONDecodeError:
+                    result["evaluation"] = None
+            else:
+                result["evaluation"] = None
+            results.append(result)
+        
+        return results
     
     def get_results_by_model(
         self, 
