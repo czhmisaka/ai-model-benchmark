@@ -92,6 +92,16 @@
                   <div class="io-label">输出预览:</div>
                   <div class="io-content output">{{ subTask.output }}</div>
                 </div>
+                <!-- Think 内容显示 -->
+                <div class="io-section" v-if="subTask.think_content">
+                  <div class="io-label">💭 思考内容 (Think):</div>
+                  <div class="io-content think">{{ subTask.think_content }}</div>
+                </div>
+                <!-- Answer 内容显示 -->
+                <div class="io-section" v-if="subTask.answer_content">
+                  <div class="io-label">✍️ 回答内容 (Answer):</div>
+                  <div class="io-content answer">{{ subTask.answer_content }}</div>
+                </div>
               </div>
               <!-- 校对结果展示 -->
               <div class="detail-round-evaluation" v-if="subTask.evaluation">
@@ -134,6 +144,8 @@ interface SubTask {
   prompt?: string
   error?: string
   evaluation?: Evaluation
+  think_content?: string  // 思考内容
+  answer_content?: string  // 回答内容
 }
 
 interface TaskData {
@@ -419,6 +431,18 @@ function trimText(text: string): string {
   }
   
   &.output {
+    background: rgba(34, 197, 94, 0.08);
+    border: 1px solid rgba(34, 197, 94, 0.2);
+    color: var(--gray-700);
+  }
+  
+  &.think {
+    background: rgba(139, 92, 246, 0.08);
+    border: 1px solid rgba(139, 92, 246, 0.2);
+    color: var(--gray-700);
+  }
+  
+  &.answer {
     background: rgba(34, 197, 94, 0.08);
     border: 1px solid rgba(34, 197, 94, 0.2);
     color: var(--gray-700);
