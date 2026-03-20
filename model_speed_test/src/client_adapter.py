@@ -220,7 +220,8 @@ class ProviderAdapter:
                 is_first=not first_chunk_sent,
                 timestamp=provider_chunk.timestamp,
                 is_think=provider_chunk.is_think,
-                is_think_end=provider_chunk.is_think_end
+                is_think_end=provider_chunk.is_think_end,
+                reasoning_content=getattr(provider_chunk, 'reasoning_content', None)
             )
             first_chunk_sent = True
     

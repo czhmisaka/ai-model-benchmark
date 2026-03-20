@@ -164,16 +164,26 @@ class ModelTester:
                 })
                 
                 # 分别记录 think 和 answer 内容
-                if chunk.is_think:
+                # 优先使用 reasoning_content 判断
+                chunk_reasoning = getattr(chunk, 'reasoning_content', None)
+                if chunk_reasoning:
+                    # 有 reasoning_content 就是 think 内容
+                    think_content += chunk_reasoning
+                    is_in_think = True
+                elif chunk.is_think:
                     think_content += chunk.content
                     is_in_think = True
                 else:
                     # 当 think 结束，开始记录 answer
-                    if is_in_think and not chunk.is_think:
+                    if is_in_think:
                         is_in_think = False
                     answer_content += chunk.content
                 
-                full_content += chunk.content
+                # full_content 包含所有内容
+                if chunk_reasoning:
+                    full_content += chunk_reasoning
+                else:
+                    full_content += chunk.content
                 
         except Exception as e:
             error_type = type(e).__name__
