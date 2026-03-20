@@ -79,7 +79,13 @@ class ModelClient:
             model=model,
             provider=provider,
             timeout=timeout,
-            extra_params=extra_params
+            extra_params=extra_params,
+            thinking_enabled=thinking_enabled,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty
         )
         
         self.provider = provider_class(config)

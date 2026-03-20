@@ -77,6 +77,18 @@ class OpenAIProvider(BaseLLMProvider):
         if self.config.frequency_penalty != 0:
             payload["frequency_penalty"] = self.config.frequency_penalty
 
+        # 添加 thinking 参数（对于支持思考模式的模型）
+        if self.config.thinking_enabled:
+            payload["thinking"] = {"type": "enabled"}
+            # 某些 API 可能需要不同的格式
+            # 例如 MiniMax 可能需要 thoughtfulness 或其他参数
+
+        # 合并 extra_params
+        if self.config.extra_params:
+            for key, value in self.config.extra_params.items():
+                if key not in payload:
+                    payload[key] = value
+
         return payload
 
     async def chat(
