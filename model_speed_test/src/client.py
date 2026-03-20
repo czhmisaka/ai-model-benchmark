@@ -44,7 +44,13 @@ class ModelClient:
         model: str,
         provider: str = "openai",
         timeout: float = 300.0,
-        extra_params: Dict[str, Any] = None
+        extra_params: Dict[str, Any] = None,
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+        max_tokens: int = 4096,
+        presence_penalty: float = 0.0,
+        frequency_penalty: float = 0.0,
+        thinking_enabled: bool = True
     ):
         self.name = name
         self.endpoint = endpoint
@@ -53,6 +59,12 @@ class ModelClient:
         self.provider_type = provider
         self.timeout = timeout
         self.extra_params = extra_params or {}
+        self.temperature = temperature
+        self.top_p = top_p
+        self.max_tokens = max_tokens
+        self.presence_penalty = presence_penalty
+        self.frequency_penalty = frequency_penalty
+        self.thinking_enabled = thinking_enabled
         
         registry = get_provider_registry()
         provider_class = registry.get(provider)

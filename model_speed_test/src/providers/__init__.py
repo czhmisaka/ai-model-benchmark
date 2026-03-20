@@ -37,8 +37,31 @@ def _register_all_providers():
     
     return registry
 
-# 全局注册表实例
-_provider_registry = _register_all_providers()
+# 创建全局注册表实例
+_provider_registry = ProviderRegistry()
+
+# 注册所有 Provider
+def _register_all_providers():
+    # OpenAI 兼容 Provider（默认，包含 MiniMax、硅基流动等）
+    _provider_registry.register('openai', OpenAIProvider)
+    _provider_registry.register('compatible', OpenAIProvider)  # 别名
+    
+    # Anthropic Claude
+    _provider_registry.register('anthropic', AnthropicProvider)
+    _provider_registry.register('claude', AnthropicProvider)  # 别名
+    
+    # Google Gemini
+    _provider_registry.register('gemini', GeminiProvider)
+    
+    # 本地模型（LMStudio、Ollama）
+    _provider_registry.register('lmstudio', LMStudioProvider)
+    _provider_registry.register('ollama', OllamaProvider)
+    
+    # Azure OpenAI
+    _provider_registry.register('azure', AzureOpenAIProvider)
+
+# 初始化注册
+_register_all_providers()
 
 def get_provider_registry() -> ProviderRegistry:
     """获取 Provider 注册表"""
