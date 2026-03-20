@@ -155,8 +155,12 @@ class ProviderAdapter:
         async for chunk in self._provider.stream_chat(provider_messages, **kwargs):
             if chunk.content:
                 content_parts.append(chunk.content)
-            if chunk.is_think and chunk.content:
-                think_content_parts.append(chunk.content)
+            # 优先使用 reasoning_content（从 reasoning 字段分离出来的内容）
+            if chunk.is_think:
+                if hasattr(chunk, 'reasoning_content') and chunk.reasoning_content:
+                    think_content_parts.append(chunk.reasoning_content)
+                elif chunk.content:
+                    think_content_parts.append(chunk.content)
         
         return {
             "content": "".join(content_parts),
