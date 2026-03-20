@@ -155,13 +155,37 @@ class ModelTester:
                 messages=messages,
                 system_prompt=system_prompt
             ):
-                chunks.append({
-                    "content": chunk.content,
-                    "is_first": chunk.is_first,
-                    "timestamp": chunk.timestamp,
-                    "is_think": chunk.is_think,
-                    "is_think_end": chunk.is_think_end
-                })
+                # 构建 chunk 内容（包含 reasoning_content 和 content）
+                chunk_content = chunk.content
+                chunk_reasoning = getattr(chunk, 'reasoning_content', None)
+                
+                # 如果有 reasoning_content，也加入 chunks 用于 metrics 计算
+                if chunk_reasoning:
+                    chunks.append({
+                        "content": chunk_reasoning,
+                        "is_first": chunk.is_first and not chunk_reasoning,
+                        "timestamp": chunk.timestamp,
+                        "is_think": True,
+                        "is_think_end": False,
+                        "reasoning_content": chunk_reasoning
+                    })
+                    # answer 部分作为单独的 chunk
+                    if chunk_content:
+                        chunks.append({
+                            "content": chunk_content,
+                            "is_first": False,
+                            "timestamp": chunk.timestamp + 0.001,  # 稍微延后
+                            "is_think": False,
+                            "is_think_end": chunk.is_think_end
+                        })
+                else:
+                    chunks.append({
+                        "content": chunk.content,
+                        "is_first": chunk.is_first,
+                        "timestamp": chunk.timestamp,
+                        "is_think": chunk.is_think,
+                        "is_think_end": chunk.is_think_end
+                    })
                 
                 # 分别记录 think 和 answer 内容
                 # 优先使用 reasoning_content 判断
