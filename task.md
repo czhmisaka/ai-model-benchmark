@@ -29,6 +29,24 @@
 
 ## 最近修复记录
 
+### 2026-03-22
+1. **添加 LMStudio 模型到数据库**：
+   - 192.168.3.31:1234 (3个模型):
+     - LMStudio-Qwen3.5-9B
+     - Qwen3-Embedding-4B
+     - Nomic-Embedding
+   - 192.168.3.54:1234 (8个模型):
+     - Nemotron-3-Super-120B-IQ3
+     - Nemotron-3-Super-120B-BF16
+     - Nemotron-3-Nano
+     - Qwen3.5-35B-A3B
+     - Qwen3.5-9B-54
+     - Qwen3-VL-8B-54
+     - GLM-4.6V-Flash
+     - Nomic-Embedding-54
+
+## 修复记录
+
 ### 2026-03-20
 1. **openai.py 修复**：
    - 支持 `reasoning` 和 `reasoning_content` 字段
