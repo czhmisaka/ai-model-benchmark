@@ -248,17 +248,12 @@ class ModelTester:
         )
         
         # 记录结果（包含分离的 think 和 answer 内容）
-        # 修复：添加 success 字段到 metadata，确保空输出被正确标记为失败
         self.recorder.record(
             model_name=self.client.name,
             prompt=display_prompt,
             response=full_content,
             metrics=metrics.to_dict(),
-            metadata={
-                "test_type": "stream",
-                "messages_count": len(messages) if messages else 0,
-                "success": True  # 流式测试成功（走到这里说明 output_tokens > 0）
-            },
+            metadata={"test_type": "stream", "messages_count": len(messages) if messages else 0},
             think_content=think_content if think_content else None,
             answer_content=answer_content if answer_content else None
         )
@@ -379,17 +374,12 @@ class ModelTester:
         )
         
         # 记录结果
-        # 修复：添加 success 字段到 metadata，确保空输出被正确标记为失败
         self.recorder.record(
             model_name=self.client.name,
             prompt=display_prompt,
             response=content,
             metrics=metrics.to_dict(),
-            metadata={
-                "test_type": "non-stream",
-                "messages_count": len(messages) if messages else 0,
-                "success": True  # 非流式测试成功（走到这里说明 output_tokens > 0）
-            }
+            metadata={"test_type": "non-stream", "messages_count": len(messages) if messages else 0}
         )
         
         # 输出 Output

@@ -167,27 +167,13 @@ class IORecorder:
         file_path = round_dir / filename
         
         # 构建记录数据
-        # 修复：增加 output_tokens 检查，如果 output_tokens 为 0 也标记为失败
-        output_tokens = metrics.get("output_tokens", 0) if metrics else 0
-        
-        # 综合判断 success：
-        # 1. 优先使用 metadata 中的 success 字段
-        # 2. 如果 metadata.success 为 True 但 output_tokens 为 0，仍然标记为失败
-        if metadata:
-            base_success = metadata.get("success", True)
-        else:
-            base_success = True
-        
-        # 如果 output_tokens 为 0，无论 metadata.success 是什么，都标记为失败
-        final_success = base_success and (output_tokens > 0)
-        
         record_data = {
             "id": record_id,
             "timestamp": timestamp,
             "group_id": self.group_id,
             "round": round_num,
             "model_name": model_name,
-            "success": final_success,  # 使用修正后的 success 标志
+            "success": metadata.get("success", True) if metadata else True,
             "metrics": metrics,
             "prompt": prompt,
             "response": response,
