@@ -6,11 +6,12 @@
 import asyncio
 import aiohttp
 import json
+import os
 import time
 
 # 移动云 codingPlan API 配置
 API_ENDPOINT = "https://zhenze-huhehaote.cmecloud.cn/api/coding/v1/chat/completions"
-API_KEY = "olpkbJRoT81NC1uNa6hEvg-aG0kMeRnEi7b840_wyLY"
+API_KEY = os.environ.get("YIDONGYUN_API_KEY", "")
 MODEL = "minimax-m2.5"
 
 # 测试用例

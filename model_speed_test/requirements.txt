@@ -21,3 +21,14 @@ APScheduler>=3.10.0
 tiktoken>=0.5.0
 
 # Python 3.10+ 内置asyncio，不需要额外安装
+
+# ===== 新增：报告生成相关依赖 =====
+
+# PDF 生成
+weasyprint>=60.0
+
+# Excel 导出
+openpyxl>=3.1.0
+
+# 数据处理
+pandas>=2.0.0

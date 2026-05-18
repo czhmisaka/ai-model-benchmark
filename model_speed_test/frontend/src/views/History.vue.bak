@@ -72,12 +72,6 @@
           <div class="stat-label">总耗时</div>
         </div>
       </div>
-      <div class="export-actions">
-        <button @click="showReportPreview" class="btn-export">📊 预览报告</button>
-        <button @click="exportPDF" class="btn-export btn-pdf">📄 PDF</button>
-        <button @click="exportMarkdown" class="btn-export btn-md">📝 Markdown</button>
-        <button @click="exportExcel" class="btn-export btn-excel">📊 Excel</button>
-      </div>
       <button @click="showCharts = true" class="btn-primary">查看图表分析</button>
       <button @click="selectedGroup = null; showCharts = false" class="btn-secondary">返回列表</button>
     </div>
@@ -93,7 +87,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
-import ReportPreviewModal from '../components/ReportPreviewModal.vue'
 
 const history = ref<any[]>([])
 const search = ref('')
@@ -106,7 +99,6 @@ const models = ref<string[]>([])
 // 详情和图表
 const selectedGroup = ref<any>(null)
 const showCharts = ref(false)
-const showPreview = ref(false)
 const trendChartRef = ref<HTMLElement | null>(null)
 const compareChartRef = ref<HTMLElement | null>(null)
 const distChartRef = ref<HTMLElement | null>(null)
@@ -349,29 +341,6 @@ async function renderCharts(group: any) {
   }
 }
 
-// 导出功能
-function showReportPreview() {
-  showPreview.value = true
-}
-
-function exportPDF() {
-  if (selectedGroup.value) {
-    window.open(`/api/history/${selectedGroup.value.group_id}/report/pdf`, "_blank")
-  }
-}
-
-function exportMarkdown() {
-  if (selectedGroup.value) {
-    window.open(`/api/history/${selectedGroup.value.group_id}/report/markdown`, "_blank")
-  }
-}
-
-function exportExcel() {
-  if (selectedGroup.value) {
-    window.open(`/api/history/${selectedGroup.value.group_id}/report/excel`, "_blank")
-  }
-}
-
 function deleteItem(item: any) {
   if (!confirm('确定删除此测试记录吗？')) return
   fetch(`/api/history/${item.group_id}`, { method: 'DELETE' })
@@ -551,64 +520,6 @@ watch(() => selectedGroup.value, (val) => {
 }
 
 .detail-panel {
-
-  .export-actions {
-    display: flex;
-    gap: 12px;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-  }
-
-  .btn-export {
-    padding: 10px 20px;
-    border: 1px solid var(--gray-600);
-    background: var(--gray-700);
-    color: var(--gray-200);
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 14px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-
-    &:hover {
-      background: var(--gray-600);
-    }
-
-    &.btn-pdf {
-      background: var(--primary-dim);
-      border-color: var(--primary);
-      color: var(--primary);
-
-      &:hover {
-        background: var(--primary);
-        color: white;
-      }
-    }
-
-    &.btn-md {
-      background: var(--accent-green-dim);
-      border-color: var(--accent-green);
-      color: var(--accent-green);
-
-      &:hover {
-        background: var(--accent-green);
-        color: white;
-      }
-    }
-
-    &.btn-excel {
-      background: var(--accent-blue-dim);
-      border-color: var(--accent-blue);
-      color: var(--accent-blue);
-
-      &:hover {
-        background: var(--accent-blue);
-        color: white;
-      }
-    }
-  }
-
   background: var(--gray-800);
   padding: 24px;
   border-radius: 12px;

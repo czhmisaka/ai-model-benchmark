@@ -20,6 +20,8 @@ class StreamChunk:
     is_think_end: bool = False           # 是否是思考结束
     reasoning_content: str = ""          # 推理内容（某些Provider使用）
     usage: Dict[str, int] = field(default_factory=dict)  # Token使用量
+    finish_reason: str = ""              # 结束原因 (stop, length, etc.)
+    is_final: bool = False               # 是否是最终块（用于标记流结束）
     
     def __post_init__(self):
         if self.timestamp == 0.0:

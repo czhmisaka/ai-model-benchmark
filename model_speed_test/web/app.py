@@ -1773,3 +1773,94 @@ def create_app() -> FastAPI:
 
 if __name__ == "__main__":
     run_server()
+
+# ===== 报告生成 API =====
+
+@app.get("/api/history/{group_id}/report/pdf")
+async def generate_pdf_report(group_id: str, template: str = "default"):
+    """生成 PDF 格式的测试报告，支持模板参数"""
+    import io
+    try:
+        from .report_generator import ReportGenerator
+        generator = ReportGenerator()
+        pdf_bytes = generator.generate_pdf(group_id, template_name=template)
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=report_{group_id}.pdf"}
+        )
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    except ImportError as e:
+        return {"success": False, "error": f"依赖未安装: {str(e)}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/history/{group_id}/report/excel")
+async def generate_excel_report(group_id: str):
+    """生成 Excel 格式的测试报告"""
+    import io
+    try:
+        from .excel_exporter import export_to_excel
+        excel_buffer = export_to_excel(group_id)
+        return StreamingResponse(
+            io.BytesIO(excel_buffer),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=report_{group_id}.xlsx"}
+        )
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    except ImportError as e:
+        return {"success": False, "error": f"依赖未安装: {str(e)}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/report/templates")
+async def list_report_templates():
+    """列出所有可用的报告模板"""
+    try:
+        from .report_generator import ReportGenerator
+        generator = ReportGenerator()
+        templates = generator.list_templates()
+        return {"success": True, "data": templates}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/history/{group_id}/report/markdown")
+async def get_markdown_report(group_id: str, template: str = "default"):
+    """获取 Markdown 格式的报告内容，支持模板参数"""
+    import sys
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from src.database import get_database
+        from .report_generator import ReportGenerator
+        db = get_database()
+        generator = ReportGenerator()
+        summary_data = db.get_group_summary(group_id)
+        if not summary_data:
+            return {"success": False, "error": "测试组不存在"}
+        group_info = summary_data.get('group', {})
+        model_stats = summary_data.get('model_stats', [])
+        results = db.get_results(group_id)
+        total = len(results)
+        success = sum(1 for r in results if r.get('success'))
+        success_rate = (success / total * 100) if total > 0 else 0
+        ttft_values = [r.get('ttft_seconds', 0) for r in results if r.get('ttft_seconds')]
+        tps_values = [r.get('tokens_per_second', 0) for r in results if r.get('tokens_per_second')]
+        token_values = [r.get('output_tokens', 0) for r in results if r.get('output_tokens')]
+        avg_ttft = sum(ttft_values) / len(ttft_values) if ttft_values else 0
+        avg_tps = sum(tps_values) / len(tps_values) if tps_values else 0
+        avg_tokens = sum(token_values) / len(token_values) if token_values else 0
+        summary = {'group_id': group_id, 'start_time': group_info.get('start_time', 'N/A'), 'total': total, 'success': success, 'avg_ttft': avg_ttft, 'avg_tps': avg_tps, 'avg_tokens': avg_tokens}
+        formatted_stats = []
+        for stat in model_stats:
+            count = stat.get('total', 0)
+            success_count = stat.get('success_count', 0)
+            formatted_stats.append({'model_name': stat.get('model_name', 'Unknown'), 'count': count, 'success_count': success_count, 'avg_ttft': stat.get('avg_ttft', 0), 'avg_tps': stat.get('avg_tokens_per_second', 0), 'avg_tokens': stat.get('total_output_tokens', 0) / count if count > 0 else 0})
+        content = generator.generate_markdown({"summary": summary, "results": results, "model_stats": formatted_stats}, template_name=template)
+        return {"success": True, "content": content, "stats": {"total": total, "successRate": round(success_rate, 1), "avgTtft": round(avg_ttft * 1000, 2), "avgTps": round(avg_tps, 2)}}
+    except Exception as e:
+        return {"success": False, "error": str(e)}

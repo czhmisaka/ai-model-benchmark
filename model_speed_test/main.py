@@ -598,7 +598,8 @@ class WebAwareTester:
             result = await self._run_stream_test_with_events(
                 tester, client.name, display_prompt, 
                 messages, system_prompt, rounds, interval, test_case_name,
-                eval_model=eval_model, expected_output=expected_output
+                eval_model=eval_model, expected_output=expected_output,
+                test_case=test_case
             )
         else:
             result = await tester.run_test_rounds(
@@ -622,14 +623,23 @@ class WebAwareTester:
         interval: float,
         test_case_name: str,
         eval_model: str = None,
-        expected_output: str = None
+        expected_output: str = None,
+        test_case: Dict[str, Any] = None
     ):
-        """流式测试并推送事件（带超时控制）"""
+        """流式测试并推送事件（带超时控制，支持多步骤 follow-up）"""
         results = []
         
         # 检查是否需要校对
         needs_verification = bool(eval_model and expected_output)
         eval_client = None
+        
+        # 检查是否为多步骤测试用例
+        follow_up_questions = None
+        if test_case:
+            metadata = test_case.get("metadata", {})
+            follow_up_questions = metadata.get("follow_up_questions", [])
+            if follow_up_questions:
+                print(f"[{model_name}] 📋 检测到多步骤测试: {len(follow_up_questions)}个跟进问题")
         
         # 如果需要校对，创建校对客户端
         if needs_verification and self.eval_model_config:

@@ -1,5 +1,6 @@
 """使用 ModelClient 测试移动云模型"""
 import asyncio
+import os
 import sys
 sys.path.insert(0, '/Volumes/mobileDisk/test/模型速度测试/model_speed_test')
 
@@ -8,10 +9,11 @@ from src.client import ModelClient
 
 async def test_modelclient():
     """使用 ModelClient 测试"""
+    api_key = os.environ.get("YIDONGYUN_API_KEY", "")
     client = ModelClient(
         name="移动云codingPlan",
         endpoint="https://zhenze-huhehaote.cmecloud.cn/api/coding/v1/chat/completions",
-        api_key="olpkbJRoT81NC1uNa6hEvg-aG0kMeRnEi7b840_wyLY",
+        api_key=api_key,
         model="minimax-m2.5",
         provider="openai"
     )

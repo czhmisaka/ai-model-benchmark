@@ -4,6 +4,7 @@
 """
 import asyncio
 import json
+import os
 import time
 
 # 添加项目路径
@@ -17,10 +18,11 @@ async def test_yidongyun():
     """测试移动云模型的思考模式"""
     
     # 移动云 API 配置
+    api_key = os.environ.get("YIDONGYUN_API_KEY", "")
     client = ModelClient(
         name="移动云codingPlan-test",
         endpoint="https://api.e.space.cn/v1/chat/completions",  # 移动云 API 端点
-        api_key="olpkbJRoT81NC1uNa6hEvg-aG0kMeRnEi7b840_wyLY",
+        api_key=api_key,
         model="codingPlan",  # 模型名称
         provider="openai"  # 使用 OpenAI 兼容格式
     )

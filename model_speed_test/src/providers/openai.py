@@ -217,8 +217,18 @@ class OpenAIProvider(BaseLLMProvider):
                 # 兼容多种字段名：reasoning_content（标准）或 reasoning（移动云）
                 reasoning_content = delta.get("reasoning_content") or delta.get("reasoning") or ""
                 
+                # DSv4 等模型的首个 chunk 仅含 role 初始化（无 content/reasoning）
+                # 必须跳过，否则 first_chunk 被空 chunk 消耗，导致真正首 Token 的 is_first=False
+                has_content = bool(content) or bool(reasoning_content)
+                finish_reason = choices[0].get("finish_reason") or ""
+                has_usage = bool(data.get("usage"))
+                
+                if not has_content and not finish_reason and not has_usage:
+                    # 纯 role 初始化块，静默跳过（不消耗 first_chunk 标志）
+                    return None
+                
                 # 判断是否为 think 内容
-                is_first = first_chunk and not content and not reasoning_content
+                is_first = first_chunk and has_content
                 is_think = bool(reasoning_content)
                 is_think_end = False
                 
@@ -234,6 +244,9 @@ class OpenAIProvider(BaseLLMProvider):
                     if '<end_of_think>' in content:
                         is_think_end = True
                 
+                # 判断是否为最终块（纯 finish_reason 块，无内容/推理）
+                is_final = bool(finish_reason) and not has_content
+                
                 # 返回内容（content 只包含 answer，reasoning_content 单独传递）
                 return StreamChunk(
                     content=content,  # 只包含 answer
@@ -242,7 +255,9 @@ class OpenAIProvider(BaseLLMProvider):
                     is_think=is_think,  # 有 reasoning_content 就是 think
                     is_think_end=is_think_end,
                     reasoning_content=reasoning_content if reasoning_content else None,
-                    usage=data.get("usage", {})
+                    usage=data.get("usage", {}),
+                    finish_reason=finish_reason,
+                    is_final=is_final
                 )
             
             return None

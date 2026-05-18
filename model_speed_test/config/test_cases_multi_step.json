@@ -1,0 +1,117 @@
+[
+  {
+    "id": "ms001",
+    "name": "数学推理多步计算",
+    "type": "multi_step_reasoning",
+    "tags": ["数学", "推理", "多步"],
+    "version": "1.0",
+    "prompt_template": "请逐步解决这个数学问题，并给出最终答案：\n\n问题：{problem}\n\n请按以下格式回答：\n【第一步】描述你的第一步思考\n【第二步】描述你的第二步思考\n...（继续直到得出答案）\n【最终答案】xxx",
+    "variables": {
+      "problem": "一个水池有进水管和出水管。进水管每分钟可以注入 15 升水，出水管每分钟可以排出 10 升水。如果水池原来是空的，现在同时打开两个水管，3 小时后水池中有多少升水？"
+    },
+    "expected_output_type": "text",
+    "enabled": true
+  },
+  {
+    "id": "ms002",
+    "name": "逻辑推理链",
+    "type": "multi_step_reasoning",
+    "tags": ["逻辑", "推理", "多步"],
+    "version": "1.0",
+    "prompt_template": "请分析以下逻辑问题，逐步推导结论：\n\n题目：{problem}\n\n【分析过程】\n请列出你的每一步推理：\n1. ...\n2. ...\n3. ...\n\n【最终结论】",
+    "variables": {
+      "problem": "有甲、乙、丙三个人。甲说乙在说谎，乙说丙在说谎，丙说甲和乙都在说谎。请问：谁在说谎？谁说的是真话？"
+    },
+    "expected_output_type": "text",
+    "enabled": true
+  },
+  {
+    "id": "ms003",
+    "name": "代码问题调试",
+    "type": "multi_step_reasoning",
+    "tags": ["代码", "调试", "多步"],
+    "version": "1.0",
+    "prompt_template": "请帮我调试以下代码问题：\n\n问题描述：{description}\n\n代码：\n```python\n{code}\n```\n\n错误信息：\n{error}\n\n【问题分析】请先分析可能的原因\n【解决方案】提供修复后的代码\n【解释】说明修复的原理",
+    "variables": {
+      "description": "这段代码尝试从列表中删除所有偶数，但运行后结果不对",
+      "code": "nums = [1, 2, 3, 4, 5, 6]\nfor num in nums:\n    if num % 2 == 0:\n        nums.remove(num)\nprint(nums)",
+      "error": "输出结果是 [1, 3, 5, 6]，缺少了数字 4"
+    },
+    "expected_output_type": "text",
+    "enabled": true
+  },
+  {
+    "id": "ms004",
+    "name": "复杂问题分解",
+    "type": "multi_step_reasoning",
+    "tags": ["分解", "综合", "多步"],
+    "version": "1.0",
+    "prompt_template": "请分析并回答以下复杂问题：\n\n问题：{problem}\n\n【问题拆解】将问题分解为几个子问题\n【子问题分析】逐一分析每个子问题\n【综合结论】整合子问题答案得出最终结论",
+    "variables": {
+      "problem": "如果明天是昨天，那么后天就是周五。请问实际上今天应该是星期几？"
+    },
+    "expected_output_type": "text",
+    "enabled": true
+  },
+  {
+    "id": "ms005",
+    "name": "对话式多轮推理",
+    "type": "multi_step_reasoning",
+    "tags": ["对话", "推理", "多轮"],
+    "version": "1.0",
+    "prompt_template": "{first_question}",
+    "variables": {
+      "first_question": "我想开一家咖啡店。请告诉我需要考虑哪些方面？"
+    },
+    "expected_output_type": "text",
+    "enabled": true,
+    "metadata": {
+      "follow_up_questions": [
+        "在这些方面中，哪个最重要？为什么？",
+        "请针对'选址'这个方面给出具体建议",
+        "如果预算有限，应该优先投入哪个方面？"
+      ]
+    }
+  },
+  {
+    "id": "ms006",
+    "name": "Chain-of-Thought 数学",
+    "type": "multi_step_reasoning",
+    "tags": ["CoT", "数学", "推理"],
+    "version": "1.0",
+    "prompt_template": "你是一个数学专家。请用链式思考的方式解决以下问题，**每一步都要写出计算过程**：\n\n问题：{problem}\n\n【理解题目】\n...\n\n【列式计算】\n...\n\n【验证答案】\n...\n\n【最终答案】",
+    "variables": {
+      "problem": "小明有 120 元钱，他买了 3 本书，每本书的价格是 28 元。后来他又用剩下的钱买了 4 支笔，每支笔的价格相同。请问每支笔多少钱？"
+    },
+    "expected_output_type": "text",
+    "enabled": true
+  },
+  {
+    "id": "ms007",
+    "name": "假设分析多步推理",
+    "type": "multi_step_reasoning",
+    "tags": ["假设", "分析", "多步"],
+    "version": "1.0",
+    "prompt_template": "请分析以下假设情景：\n\n情景：{scenario}\n\n【假设前提】\n明确假设条件\n\n【可能情况1】\n如果 {condition1}，会发生什么？\n\n【可能情况2】\n如果 {condition2}，结果会有什么不同？\n\n【实际建议】\n基于以上分析，你应该怎么做？",
+    "variables": {
+      "scenario": "你正在考虑辞职创业",
+      "condition1": "你现在有足够的储蓄可以支撑 2 年",
+      "condition2": "你现在没有任何储蓄"
+    },
+    "expected_output_type": "text",
+    "enabled": true
+  },
+  {
+    "id": "ms008",
+    "name": "因果链条分析",
+    "type": "multi_step_reasoning",
+    "tags": ["因果", "分析", "多步"],
+    "version": "1.0",
+    "prompt_template": "请分析以下事件的因果链条：\n\n起始事件：{start_event}\n\n【直接原因】\n这个事件最直接的原因是什么？\n\n【深层原因】\n背后的深层原因是什么？\n\n【连锁反应】\n这个事件会引发哪些连锁反应？\n\n【根本原因】\n能否追溯到最根本的原因？",
+    "variables": {
+      "start_event": "某城市最近房价突然大幅上涨"
+    },
+    "expected_output_type": "text",
+    "enabled": true
+  }
+]

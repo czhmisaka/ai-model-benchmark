@@ -1,0 +1,113 @@
+{# 模型速度测试报告 - Jinja2 模板 #}
+# {{ title }}
+
+## 📊 概览
+
+- **测试组 ID**: {{ summary.group_id }}
+- **测试时间**: {{ summary.start_time }}
+- **测试用例**: {{ test_case_name }}
+- **总测试数**: {{ summary.total }}
+- **成功数**: {{ summary.success }}
+- **失败数**: {{ summary.total - summary.success }}
+- **成功率**: {{ "%0.1f" | format(success_rate) }}%
+- **平均 TTFT**: {{ "%0.3f" | format(summary.avg_ttft) }}s ({{ "%0.1f" | format(summary.avg_ttft * 1000) }}ms)
+{% if summary.min_ttft is defined %}
+- **最快 TTFT**: {{ "%0.3f" | format(summary.min_ttft) }}s
+{% endif %}
+{% if summary.max_ttft is defined %}
+- **最慢 TTFT**: {{ "%0.3f" | format(summary.max_ttft) }}s
+{% endif %}
+- **平均 TPS**: {{ "%0.2f" | format(summary.avg_tps) }} tokens/s
+{% if summary.peak_tps is defined %}
+- **峰值 TPS**: {{ "%0.2f" | format(summary.peak_tps) }} tokens/s
+{% endif %}
+- **平均输出 Tokens**: {{ "%0.0f" | format(summary.avg_tokens) }}
+- **总输出 Tokens**: {{ summary.total_tokens | default(0) }}
+
+{% if summary.notes %}
+> 📝 **备注**: {{ summary.notes }}
+{% endif %}
+
+## 🏆 模型排名
+
+| 排名 | 模型 | 测试次数 | 成功率 | 平均 TTFT | 平均 TPS | 平均 Tokens |
+|------|------|----------|--------|-----------|----------|-------------|
+{% for stat in model_stats %}
+| {{ loop.index }} | {{ stat.model_name }} | {{ stat.count }} | {{ "%0.1f" | format((stat.success_count / stat.count * 100) if stat.count > 0 else 0) }}% | {{ "%0.3f" | format(stat.avg_ttft) }}s | {{ "%0.2f" | format(stat.avg_tps) }} tokens/s | {{ "%0.0f" | format(stat.avg_tokens) }} |
+{% endfor %}
+
+{% if top_performers %}
+### 🥇 性能亮点
+
+{% for perf in top_performers %}
+- **{{ perf.category }}**: {{ perf.model_name }} - {{ perf.value }}
+{% endfor %}
+{% endif %}
+
+## 📈 性能分析
+
+### TTFT (首 Token 时间) 分析
+
+| 指标 | 值 |
+|------|-----|
+| 平均值 | {{ "%0.0f" | format(summary.avg_ttft * 1000) }}ms |
+| P50 | {{ "%0.0f" | format(ttft_percentiles.get('p50', 0) * 1000) }}ms |
+| P95 | {{ "%0.0f" | format(ttft_percentiles.get('p95', 0) * 1000) }}ms |
+| P99 | {{ "%0.0f" | format(ttft_percentiles.get('p99', 0) * 1000) }}ms |
+
+{% if ttft_analysis %}
+{{ ttft_analysis }}
+{% endif %}
+
+### TPS (每秒 Token 数) 分析
+
+| 指标 | 值 |
+|------|-----|
+| 平均值 | {{ "%0.2f" | format(summary.avg_tps) }} tokens/s |
+| P50 | {{ "%0.2f" | format(tps_percentiles.get('p50', 0)) }} tokens/s |
+| P95 | {{ "%0.2f" | format(tps_percentiles.get('p95', 0)) }} tokens/s |
+
+{% if tps_analysis %}
+{{ tps_analysis }}
+{% endif %}
+
+{% if charts %}
+## 📊 可视化图表
+
+{% for chart in charts %}
+- {% if chart.description %}_{{ chart.description }}_{% endif %}
+{% endfor %}
+{% endif %}
+
+## 📋 详细数据
+
+| 序号 | 模型 | 测试用例 | 轮次 | TTFT | TPS | Tokens | 状态 |
+|------|------|----------|------|------|-----|--------|------|
+{% for r in results %}
+| {{ loop.index }} | {{ r.model_name }} | {{ r.test_case_name }} | {{ r.round_number }} | {{ "%0.3f" | format(r.ttft_seconds) }}s | {{ "%0.2f" | format(r.tokens_per_second) }} | {{ r.output_tokens }} | {{ '✓' if r.success else '✗' }} |
+{% endfor %}
+
+{% if failures %}
+## ❌ 失败详情
+
+{% for fail in failures %}
+### 失败 #{{ loop.index }}
+- **模型**: {{ fail.model_name }}
+- **测试用例**: {{ fail.test_case_name }}
+- **轮次**: {{ fail.round_number }}
+- **错误信息**: {{ fail.error_message }}
+{% endfor %}
+{% endif %}
+
+{% if recommendations %}
+## 💡 建议
+
+{% for rec in recommendations %}
+- {{ rec }}
+{% endfor %}
+{% endif %}
+
+---
+
+*报告生成时间: {{ generated_at }}*
+*生成工具: 模型速度测试系统 v{{ version }}*

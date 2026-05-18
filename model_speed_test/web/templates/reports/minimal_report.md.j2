@@ -1,0 +1,23 @@
+{# 精简报告 - 仅核心指标 #}
+# {{ title }}
+
+| 指标 | 值 |
+|------|-----|
+| 测试组 ID | {{ summary.group_id }} |
+| 模型数 | {{ model_stats | length }} |
+| 总测试数 | {{ summary.total }} |
+| 成功率 | {{ "%0.1f" | format(success_rate) }}% |
+| 平均 TTFT | {{ "%0.0f" | format(summary.avg_ttft * 1000) }}ms |
+| 平均 TPS | {{ "%0.2f" | format(summary.avg_tps) }} tokens/s |
+
+{% if failures %}
+## 失败记录
+
+{% for fail in failures %}
+- **{{ fail.model_name }}** ({{ fail.test_case_name }}): {{ fail.error_message }}
+{% endfor %}
+{% endif %}
+
+---
+
+*生成时间: {{ generated_at }}*
