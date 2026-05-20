@@ -9,6 +9,14 @@ cd "$SCRIPT_DIR"
 echo "🚀 Starting AI Model Speed Test..."
 echo "=========================================="
 
+# 加载 .env 环境变量
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    echo "📋 Loading environment variables from .env..."
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
 # 检查 Python
 if ! command -v python &> /dev/null; then
     echo "❌ Python not found!"

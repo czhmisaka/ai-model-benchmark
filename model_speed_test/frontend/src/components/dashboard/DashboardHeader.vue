@@ -24,6 +24,7 @@
       <button class="btn btn-secondary" id="stopBtn" @click="$emit('stop')" :disabled="!testRunning">■ STOP</button>
       <button class="btn btn-secondary" id="clearBtn" @click="$emit('clear')">✕ CLEAR</button>
       <button class="btn btn-secondary" id="historyBtn" @click="$emit('show-history')">☰ HISTORY</button>
+      <button class="btn btn-accent" id="aiAnalysisBtn" @click="$emit('ai-analysis')" :disabled="aiAnalysisLoading">🤖 AI 分析</button>
     </div>
   </header>
 </template>
@@ -35,6 +36,7 @@ interface Props {
   sseStatus: string
   testRunning: boolean
   testStatus: string
+  aiAnalysisLoading: boolean
 }
 
 defineProps<Props>()
@@ -45,6 +47,7 @@ defineEmits<{
   stop: []
   clear: []
   'show-history': []
+  'ai-analysis': []
 }>()
 </script>
 
@@ -159,6 +162,25 @@ defineEmits<{
 .btn-secondary {
   &:hover:not(:disabled) {
     background: var(--gray-50);
+  }
+}
+
+.btn-accent {
+  border-color: var(--accent-orange);
+  color: var(--accent-orange);
+  
+  &:hover:not(:disabled) {
+    background: rgba(249, 115, 22, 0.08);
+    border-color: var(--accent-orange);
+    color: var(--accent-orange-dark, #ea580c);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(249, 115, 22, 0.15);
+  }
+  
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    animation: pulse 1.5s infinite;
   }
 }
 

@@ -66,7 +66,7 @@ class LMStudioProvider(BaseLLMProvider):
             
             # 构建请求体（OpenAI 兼容格式）
             body = {
-                "messages": [msg.model_dump() for msg in messages],
+                "messages": [msg.to_dict() for msg in messages],
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "model": self.config.model or "local-model",
@@ -142,7 +142,7 @@ class LMStudioProvider(BaseLLMProvider):
             temperature = kwargs.get("temperature", self.config.temperature)
             
             body = {
-                "messages": [msg.model_dump() for msg in messages],
+                "messages": [msg.to_dict() for msg in messages],
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "stream": True,

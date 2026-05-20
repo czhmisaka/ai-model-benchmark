@@ -80,7 +80,7 @@ class AzureOpenAIProvider(BaseLLMProvider):
             
             # 构建请求体
             body = {
-                "messages": [msg.model_dump() for msg in messages],
+                "messages": [msg.to_dict() for msg in messages],
                 "max_tokens": max_tokens,
                 "temperature": temperature,
             }
@@ -148,7 +148,7 @@ class AzureOpenAIProvider(BaseLLMProvider):
             temperature = kwargs.get("temperature", self.config.temperature)
             
             body = {
-                "messages": [msg.model_dump() for msg in messages],
+                "messages": [msg.to_dict() for msg in messages],
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "stream": True,

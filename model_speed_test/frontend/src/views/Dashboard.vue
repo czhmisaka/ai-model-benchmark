@@ -26,6 +26,9 @@
         <button class="btn btn-secondary" id="stopBtn" @click="stopTest" :disabled="!testRunning">■ STOP</button>
         <button class="btn btn-secondary" id="clearBtn" @click="clearTest">✕ CLEAR</button>
         <button class="btn btn-secondary" id="historyBtn" @click="showHistoryModal">☰ HISTORY</button>
+        <button class="btn btn-accent" id="aiAnalysisBtn" @click="toggleAiAnalysis" :disabled="aiAnalysisLoading">
+          {{ aiAnalysisLoading ? '⏳ 分析中...' : '🤖 AI 分析' }}
+        </button>
       </div>
     </header>
 
@@ -678,6 +681,38 @@
 
     <!-- Toast -->
       <div class="toast" :class="{ show: toastVisible, [toastType]: true }">{{ toastMessage }}</div>
+
+    <!-- AI 分析结果 Modal -->
+    <div class="ai-analysis-overlay" v-if="showAiAnalysis" @click.self="closeAiAnalysis">
+      <div class="ai-analysis-modal">
+        <div class="ai-analysis-header">
+          <div class="ai-analysis-title">
+            <span class="ai-analysis-title-icon">🤖</span>
+            <span>MiniMax M2.7 分析报告</span>
+          </div>
+          <div class="ai-analysis-actions">
+            <button class="ai-btn" @click="copyAiReport" :disabled="!aiAnalysisContent" title="复制报告">📋 复制</button>
+            <button class="ai-analysis-close" @click="closeAiAnalysis" title="关闭">✕</button>
+          </div>
+        </div>
+        <div class="ai-analysis-body" ref="aiReportContainer">
+          <div v-if="aiAnalysisLoading && !aiAnalysisContent" class="ai-loading-state">
+            <div class="ai-loading-spinner"></div>
+            <div class="ai-loading-text">正在连接 MiniMax M2.7 进行分析...</div>
+          </div>
+          <div v-if="aiAnalysisError" class="ai-error-state">
+            <div class="ai-error-icon">⚠️</div>
+            <div class="ai-error-text">{{ aiAnalysisError }}</div>
+          </div>
+          <div class="ai-report-container" v-html="renderedAiReport" v-if="aiAnalysisContent"></div>
+        </div>
+        <div class="ai-analysis-footer">
+          <span class="ai-analysis-status" v-if="aiAnalysisContent && !aiAnalysisLoading">✓ 分析完成</span>
+          <span class="ai-analysis-status" v-else-if="aiAnalysisLoading">⏳ 流式接收中...</span>
+          <span class="ai-analysis-status" v-else>等待中...</span>
+        </div>
+      </div>
+    </div>
   </div>
   </template>
 
@@ -967,6 +1002,132 @@ const modelPopoverData = ref<any>({})
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref('')
+
+// AI 分析
+const showAiAnalysis = ref(false)
+const aiAnalysisLoading = ref(false)
+const aiAnalysisContent = ref('')
+const aiAnalysisError = ref('')
+const aiReportContainer = ref<HTMLElement | null>(null)
+let aiEventSource: EventSource | null = null
+
+const renderedAiReport = computed(() => {
+  if (!aiAnalysisContent.value) return ''
+  return formatMarkdown(aiAnalysisContent.value)
+})
+
+function formatMarkdown(text: string): string {
+  let html = text
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>')
+  
+  // 代码块 ```...```
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="ai-code-block"><code>$2</code></pre>')
+  
+  // 行内代码 `...`
+  html = html.replace(/`([^`]+)`/g, '<code class="ai-inline-code">$1</code>')
+  
+  // 粗体 **...**
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  
+  // 斜体 *...*
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>')
+  
+  // 标题 ###, ##, #
+  html = html.replace(/^### (.+)$/gm, '<h3 class="ai-h3">$1</h3>')
+  html = html.replace(/^## (.+)$/gm, '<h2 class="ai-h2">$1</h2>')
+  html = html.replace(/^# (.+)$/gm, '<h1 class="ai-h1">$1</h1>')
+  
+  // 水平线 ---
+  html = html.replace(/^---$/gm, '<hr class="ai-hr">')
+  
+  // 无序列表
+  html = html.replace(/^- (.+)$/gm, '<li class="ai-li">$1</li>')
+  
+  // 换行
+  html = html.replace(/\n\n/g, '</p><p class="ai-p">')
+  html = html.replace(/\n/g, '<br>')
+  
+  html = '<p class="ai-p">' + html + '</p>'
+  
+  return html
+}
+
+function toggleAiAnalysis() {
+  if (aiAnalysisLoading.value) return
+  if (showAiAnalysis.value) {
+    closeAiAnalysis()
+    return
+  }
+  openAiAnalysis()
+}
+
+function openAiAnalysis() {
+  showAiAnalysis.value = true
+  aiAnalysisLoading.value = true
+  aiAnalysisContent.value = ''
+  aiAnalysisError.value = ''
+  
+  const baseUrl = window.location.origin
+  const url = `${baseUrl}/api/analysis`
+  
+  aiEventSource = new EventSource(url)
+  
+  aiEventSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data)
+      if (data.content) {
+        aiAnalysisContent.value += data.content
+        // 自动滚动到底部
+        nextTick(() => {
+          if (aiReportContainer.value) {
+            aiReportContainer.value.scrollTop = aiReportContainer.value.scrollHeight
+          }
+        })
+      }
+      if (data.done) {
+        aiAnalysisLoading.value = false
+        aiEventSource?.close()
+        aiEventSource = null
+      }
+      if (data.error) {
+        aiAnalysisError.value = data.error
+        aiAnalysisLoading.value = false
+        aiEventSource?.close()
+        aiEventSource = null
+      }
+    } catch (e) {
+      // 非 JSON 数据，可能是纯文本
+      aiAnalysisContent.value += event.data
+    }
+  }
+  
+  aiEventSource.onerror = () => {
+    aiAnalysisError.value = 'SSE 连接失败或中断，请检查后端服务是否运行'
+    aiAnalysisLoading.value = false
+    aiEventSource?.close()
+    aiEventSource = null
+  }
+}
+
+function closeAiAnalysis() {
+  if (aiEventSource) {
+    aiEventSource.close()
+    aiEventSource = null
+  }
+  showAiAnalysis.value = false
+  aiAnalysisLoading.value = false
+}
+
+function copyAiReport() {
+  if (!aiAnalysisContent.value) return
+  navigator.clipboard.writeText(aiAnalysisContent.value).then(() => {
+    showToast('报告已复制到剪贴板', 'success')
+  }).catch(() => {
+    showToast('复制失败，请手动选择复制', 'error')
+  })
+}
 
 // 卡片展开动画
 const isAnimating = ref(false)
@@ -6061,5 +6222,319 @@ onUnmounted(() => {
   color: var(--gray-500);
   font-size: 0.75rem;
   font-family: 'JetBrains Mono', monospace;
+}
+
+/* ===== AI 分析 Modal 样式 ===== */
+.ai-analysis-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.3s ease;
+}
+
+.ai-analysis-modal {
+  width: min(900px, 90vw);
+  max-height: 85vh;
+  background: #FFFFFF;
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  animation: slideUp 0.3s ease;
+}
+
+.ai-analysis-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.ai-analysis-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #000000;
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+.ai-analysis-title-icon {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  font-size: 0.7rem;
+}
+
+.ai-analysis-close {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--gray-200);
+  border-radius: 4px;
+  color: var(--gray-600);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ai-analysis-close:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ai-analysis-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  min-height: 300px;
+}
+
+.ai-loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  height: 200px;
+  color: var(--gray-600);
+}
+
+.ai-loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--gray-200);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.ai-loading-text {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  color: var(--gray-500);
+}
+
+.ai-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 200px;
+}
+
+.ai-error-icon {
+  width: 40px;
+  height: 40px;
+  border: 2px solid var(--danger);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--danger);
+}
+
+.ai-error-text {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  color: var(--danger);
+}
+
+.ai-report-container {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.8;
+  color: #333;
+}
+
+.ai-report-container :deep(h1.ai-h1) {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #000;
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 8px;
+  margin: 24px 0 16px 0;
+}
+
+.ai-report-container :deep(h2.ai-h2) {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #000;
+  border-bottom: 1px solid var(--gray-200);
+  padding-bottom: 6px;
+  margin: 20px 0 12px 0;
+}
+
+.ai-report-container :deep(h3.ai-h3) {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #000;
+  margin: 16px 0 8px 0;
+}
+
+.ai-report-container :deep(.ai-p) {
+  margin: 8px 0;
+  font-size: 0.88rem;
+  color: #333;
+}
+
+.ai-report-container :deep(strong) {
+  font-weight: 600;
+  color: #000;
+}
+
+.ai-report-container :deep(em) {
+  color: var(--gray-600);
+}
+
+.ai-report-container :deep(.ai-li) {
+  margin: 4px 0 4px 20px;
+  font-size: 0.88rem;
+  list-style-type: disc;
+}
+
+.ai-report-container :deep(.ai-code-block) {
+  background: #f5f5f5;
+  border: 1px solid var(--gray-200);
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin: 12px 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.ai-report-container :deep(.ai-inline-code) {
+  background: #f5f5f5;
+  border: 1px solid var(--gray-200);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+}
+
+.ai-report-container :deep(.ai-hr) {
+  border: none;
+  border-top: 1px solid var(--gray-200);
+  margin: 20px 0;
+}
+
+.ai-analysis-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-top: 1px solid var(--gray-200);
+  gap: 12px;
+}
+
+.ai-analysis-status {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--gray-400);
+}
+
+.ai-analysis-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ai-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid var(--gray-300);
+  border-radius: 4px;
+  background: transparent;
+  color: #000;
+  font-size: 0.78rem;
+  font-family: 'Space Grotesk', sans-serif;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ai-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ai-btn-primary {
+  background: transparent;
+  border: 1px solid var(--gray-300);
+}
+
+.ai-btn-primary:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.ai-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-color: var(--gray-200);
+}
+
+/* header AI 分析按钮样式 */
+.header-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--gray-300);
+  border-radius: 4px;
+  background: transparent;
+  color: #000;
+  font-size: 0.78rem;
+  font-family: 'Space Grotesk', sans-serif;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.header-action-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.header-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 机器人图标脉冲动画 */
+.ai-pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* 打字光标动画 */
+.ai-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  background: var(--accent);
+  margin-left: 2px;
+  animation: blink 1s step-end infinite;
+  vertical-align: text-bottom;
 }
 </style>

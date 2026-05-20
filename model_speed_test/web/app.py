@@ -22,6 +22,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .emitter import TestEventEmitter, test_emitter
 
+# MiniMax M2.7 API 配置
+MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")
+MINIMAX_API_URL = "https://api.minimaxi.com/v1/text/chatcompletion_v2"
 
 # 简单的认证依赖
 def get_api_key(request: Request):
@@ -1159,11 +1162,270 @@ def create_stop_event() -> asyncio.Event:
     _stop_event = asyncio.Event()
     return _stop_event
 
+@app.get("/api/analysis")
+async def ai_analysis(request: Request):
+    """
+    AI 分析端点 — 使用 MiniMax M2.7 流式分析当前页面所有测评任务数据
+    SSE 流式返回 Markdown 分析报告
+    支持参数:
+      - group_id: 可选,指定分析哪个测试组的历史数据,不传则使用 emitter 内存中的最新数据
+      - use_db: 可选,是否从数据库获取历史数据 (true/false), 默认 false
+    """
+    group_id = request.query_params.get("group_id")
+    use_db = request.query_params.get("use_db", "false").lower() == "true"
+    
+    # 先重新加载状态
+    test_emitter.reload_state()
+    
+    async def event_generator():
+        try:
+            # Step 1: 收集所有测评任务数据
+            yield f"data: {json.dumps({'type': 'status', 'status': 'collecting', 'message': '正在收集测评任务数据...'})}\n\n"
+            await asyncio.sleep(0.1)
+            
+            tasks_data = []
+            
+            if use_db and group_id:
+                # 从数据库获取指定组的数据
+                yield f"data: {json.dumps({'type': 'status', 'status': 'collecting', 'message': '正在从数据库读取测试结果...'})}\n\n"
+                try:
+                    results = test_emitter._db.get_results(group_id)
+                    # 按模型和测试用例分组
+                    grouped = {}
+                    for r in results:
+                        key = f"{r.get('model_name','')}__{r.get('test_case_name','')}"
+                        if key not in grouped:
+                            grouped[key] = {
+                                "model_name": r.get("model_name", "unknown"),
+                                "test_case_name": r.get("test_case_name", "unknown"),
+                                "rounds": {}
+                            }
+                        round_num = str(r.get("round_number", 0))
+                        grouped[key]["rounds"][round_num] = {
+                            "status": "done" if r.get("success") else "error",
+                            "metrics": r.get("metrics", {}),
+                            "evaluation": r.get("evaluation", None),
+                            "output": r.get("response", "")[:500]  # 只取前500字符摘要
+                        }
+                    tasks_data = list(grouped.values())
+                    
+                    # 也获取 group 信息
+                    group_info = test_emitter._db.get_group(group_id)
+                    if group_info:
+                        yield f"data: {json.dumps({'type': 'meta', 'group_id': group_id, 'models': group_info.get('models',[]), 'test_cases': group_info.get('test_cases',[]), 'total_rounds': group_info.get('total_rounds',0), 'completed_rounds': group_info.get('completed_rounds', 0)})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'数据库查询失败: {str(e)}'})}\n\n"
+                    return
+            
+            # 同时从 emitter 内存中获取最新数据
+            if not tasks_data:
+                # 使用 emitter 内存中的 tasks
+                for task_id, task in test_emitter._tasks.items():
+                    tasks_data.append(task)
+            
+            if not tasks_data:
+                yield f"data: {json.dumps({'type': 'error', 'message': '没有可分析的测评任务数据,请先运行测试'})}\n\n"
+                return
+            
+            task_count = len(tasks_data)
+            round_count = sum(len(t.get("rounds", {})) for t in tasks_data)
+            yield f"data: {json.dumps({'type': 'status', 'status': 'collected', 'message': f'已收集 {task_count} 个任务的数据,共 {round_count} 轮测试'})}\n\n"
+            await asyncio.sleep(0.1)
+            
+            # Step 2: 构建分析提示词
+            yield f"data: {json.dumps({'type': 'status', 'status': 'analyzing', 'message': '正在构建分析提示词...'})}\n\n"
+            
+            # 构建结构化的系统提示词
+            prompt_data = []
+            for task in tasks_data:
+                task_info = {
+                    "模型名称": task.get("model_name", "unknown"),
+                    "测试用例": task.get("test_case_name", "unknown"),
+                    "总轮数": task.get("total_rounds", 0),
+                    "各轮详情": []
+                }
+                
+                rounds = task.get("rounds", {})
+                success_count = 0
+                total_valid = 0
+                all_metrics = []
+                
+                for round_num in sorted(rounds.keys(), key=int):
+                    round_data = rounds[round_num]
+                    status = round_data.get("status", "unknown")
+                    if status in ("done", "error"):
+                        total_valid += 1
+                        if status == "done":
+                            success_count += 1
+                    
+                    metrics = round_data.get("metrics", {}) or {}
+                    round_detail = {
+                        "轮次": int(round_num),
+                        "状态": "成功" if status == "done" else ("失败" if status == "error" else "未运行"),
+                        "TTFT(首Token时间)": f"{metrics.get('ttft_ms', metrics.get('ttft', '-' ))}ms",
+                        "平均生成速度": f"{metrics.get('tokens_per_second', metrics.get('avg_tps', '-'))} tokens/s",
+                        "总耗时": f"{metrics.get('total_time_ms', metrics.get('total_duration', '-'))}ms",
+                    }
+                    
+                    # 添加评估结果(如果有)
+                    evaluation = round_data.get("evaluation")
+                    if evaluation:
+                        round_detail["评估结果"] = str(evaluation)[:200]
+                    
+                    task_info["各轮详情"].append(round_detail)
+                    
+                    if metrics:
+                        all_metrics.append(metrics)
+                
+                task_info["成功率"] = f"{success_count}/{total_valid}" if total_valid > 0 else "N/A"
+                
+                # 汇总统计
+                if all_metrics:
+                    ttfts = [m.get('ttft_ms', m.get('ttft', 0)) for m in all_metrics if m.get('ttft_ms', m.get('ttft', 0)) and isinstance(m.get('ttft_ms', m.get('ttft', 0)), (int, float))]
+                    tps_list = [m.get('tokens_per_second', m.get('avg_tps', 0)) for m in all_metrics if m.get('tokens_per_second', m.get('avg_tps', 0)) and isinstance(m.get('tokens_per_second', m.get('avg_tps', 0)), (int, float))]
+                    total_times = [m.get('total_time_ms', m.get('total_duration', 0)) for m in all_metrics if m.get('total_time_ms', m.get('total_duration', 0)) and isinstance(m.get('total_time_ms', m.get('total_duration', 0)), (int, float))]
+                    
+                    if ttfts:
+                        task_info["TTFT统计"] = f"平均: {sum(ttfts)/len(ttfts):.0f}ms, 最快: {min(ttfts):.0f}ms, 最慢: {max(ttfts):.0f}ms"
+                    if tps_list:
+                        task_info["TPS统计"] = f"平均: {sum(tps_list)/len(tps_list):.1f} t/s, 最快: {max(tps_list):.1f} t/s, 最慢: {min(tps_list):.1f} t/s"
+                    if total_times:
+                        task_info["总耗时统计"] = f"平均: {sum(total_times)/len(total_times):.0f}ms, 最短: {min(total_times):.0f}ms, 最长: {max(total_times):.0f}ms"
+                
+                prompt_data.append(task_info)
+            
+            # 序列化为JSON供分析
+            data_json = json.dumps(prompt_data, ensure_ascii=False, indent=2)
+            
+            # 构建分析 system prompt
+            system_prompt = """你是一位专业的 AI 模型性能分析师。请基于提供的测评任务数据,生成一份详细的中文Markdown分析报告。
+
+## 报告结构要求:
+
+### 1. 执行摘要
+- 概括本次测试的整体情况
+- 一句话总结各模型的综合表现排名
+
+### 2. 各模型详细分析
+针对每个模型:
+- **综合得分与排名**
+- **速度表现**: 首Token时间(TTFT)和生成速度(TPS)的统计分析
+- **稳定性分析**: 成功率、速度波动情况
+- **评估结果**: 如果有评估数据,分析回复质量
+- **优势与不足**
+
+### 3. 对比分析
+- 模型间横向对比(用表格呈现)
+- 不同测试用例下的表现差异
+
+### 4. 改进建议
+- 基于数据给出的模型选择建议
+- 可优化的方向
+
+### 5. 结论
+- 最终推荐和理由
+
+## 格式要求:
+- 使用标准 Markdown 格式
+- 关键数据用 **加粗** 标记
+- 使用表格进行数据对比
+- 使用 ✅ ⚠️ ❌ 标记表现好坏
+- 语言:中文
+- 报告末尾加上: *--- AI 分析报告由 MiniMax M2.7 生成 ---*"""
+
+            user_message = f"请分析以下模型速度测评数据:\n\n```json\n{data_json}\n```\n\n请按照要求生成完整的Markdown格式分析报告。"
+            
+            yield f"data: {json.dumps({'type': 'status', 'status': 'calling', 'message': '正在调用 MiniMax M2.7 进行分析...'})}\n\n"
+            
+            # Step 3: 调用 MiniMax M2.7 API 流式生成
+            api_key = os.environ.get("MINIMAX_API_KEY", "")
+            if not api_key:
+                yield f"data: {json.dumps({'type': 'error', 'message': '未配置 MINIMAX_API_KEY 环境变量'})}\n\n"
+                return
+            
+            import aiohttp
+            
+            payload = {
+                "model": "MiniMax-M2.7",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message}
+                ],
+                "stream": True,
+                "temperature": 0.7,
+                "max_tokens": 16384
+            }
+            
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            full_text = ""
+            
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        "https://api.minimaxi.com/v1/text/chatcompletion_v2",
+                        json=payload,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=300)
+                    ) as resp:
+                        if resp.status != 200:
+                            error_text = await resp.text()
+                            yield f"data: {json.dumps({'type': 'error', 'message': f'MiniMax API 返回错误 (HTTP {resp.status}): {error_text[:500]}'})}\n\n"
+                            return
+                        
+                        buffer = ""
+                        async for chunk in resp.content:
+                            if chunk:
+                                buffer += chunk.decode('utf-8', errors='replace')
+                                while '\n' in buffer:
+                                    line, buffer = buffer.split('\n', 1)
+                                    line = line.strip()
+                                    if line.startswith('data: '):
+                                        data_str = line[6:]
+                                        if data_str == '[DONE]':
+                                            break
+                                        try:
+                                            data = json.loads(data_str)
+                                            choices = data.get('choices', [])
+                                            if choices:
+                                                delta = choices[0].get('delta', {})
+                                                content = delta.get('content', '')
+                                                if content:
+                                                    full_text += content
+                                                    yield f"data: {json.dumps({'type': 'chunk', 'content': content})}\n\n"
+                                        except json.JSONDecodeError:
+                                            pass
+                
+                # 发送完成信号
+                yield f"data: {json.dumps({'type': 'done', 'full_text': full_text})}\n\n"
+                
+            except asyncio.TimeoutError:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'MiniMax API 请求超时 (300秒)'})}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'message': f'调用 MiniMax API 失败: {str(e)}'})}\n\n"
+                
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'分析过程异常: {str(e)}'})}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
 @app.post("/test/start")
 async def start_test(request: Request):
     """启动测试"""
     global _test_running, _test_task, _test_thread
-    
+
     if _test_running:
         return {"error": "测试已在运行中"}
     
@@ -1754,6 +2016,286 @@ async def get_models():
 app.mount("/assets", StaticFiles(directory=str(Path(__file__).parent.parent / "frontend" / "dist" / "assets")), "assets")
 
 
+# ===== AI 智能分析辅助函数 =====
+
+import aiohttp
+
+async def _error_sse(message: str):
+    """生成错误 SSE 响应"""
+    yield f"data: {json.dumps({'type': 'error', 'content': message})}\n\n"
+    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+
+def _build_analysis_prompt(tasks: list) -> str:
+    """根据任务数据构建发给 MiniMax M2.7 的分析 prompt"""
+    
+    # 统计概览
+    total_tasks = len(tasks)
+    done_tasks = sum(1 for t in tasks if t.get("status") == "done")
+    running_tasks = sum(1 for t in tasks if t.get("status") == "running")
+    error_tasks = sum(1 for t in tasks if t.get("status") == "error")
+    
+    # 收集所有模型的指标
+    models_stats = {}
+    for task in tasks:
+        model_name = task.get("model_name", "Unknown")
+        case_name = task.get("case_name", "Unknown")
+        
+        if model_name not in models_stats:
+            models_stats[model_name] = {
+                "tasks": [],
+                "ttft_values": [],
+                "tpft_values": [],
+                "speed_values": [],
+                "token_values": [],
+                "eval_rates": [],
+                "error_count": 0,
+                "done_count": 0,
+                "eval_correct_count": 0,
+                "eval_incorrect_count": 0,
+                "answer_speed_values": [],
+                "think_token_values": [],
+                "answer_token_values": [],
+            }
+        
+        stats = models_stats[model_name]
+        stats["tasks"].append(task)
+        
+        if task.get("status") == "done":
+            stats["done_count"] += 1
+        elif task.get("status") == "error":
+            stats["error_count"] += 1
+        
+        # 解析数值型指标
+        try:
+            ttft = float(task.get("avgTtft", 0)) if task.get("avgTtft") and task.get("avgTtft") != "--" else None
+            if ttft is not None:
+                stats["ttft_values"].append(ttft)
+        except (ValueError, TypeError):
+            pass
+        
+        try:
+            tpft = float(task.get("avgTpft", 0)) if task.get("avgTpft") and task.get("avgTpft") != "--" else None
+            if tpft is not None:
+                stats["tpft_values"].append(tpft)
+        except (ValueError, TypeError):
+            pass
+        
+        try:
+            speed = float(task.get("avgSpeed", 0)) if task.get("avgSpeed") and task.get("avgSpeed") != "--" else None
+            if speed is not None:
+                stats["speed_values"].append(speed)
+        except (ValueError, TypeError):
+            pass
+        
+        try:
+            tokens = float(task.get("avgTokens", 0)) if task.get("avgTokens") and task.get("avgTokens") != "--" else None
+            if tokens is not None:
+                stats["token_values"].append(tokens)
+        except (ValueError, TypeError):
+            pass
+        
+        # 校对评分数据
+        eval_rate = task.get("avgEvalRate")
+        if eval_rate is not None:
+            try:
+                stats["eval_rates"].append(float(eval_rate))
+            except (ValueError, TypeError):
+                pass
+        
+        if task.get("evalCorrectCount"):
+            stats["eval_correct_count"] += int(task["evalCorrectCount"])
+        if task.get("evalIncorrectCount"):
+            stats["eval_incorrect_count"] += int(task["evalIncorrectCount"])
+        
+        # Answer速度
+        try:
+            ans_speed = float(task.get("avgAnswerSpeed", 0)) if task.get("avgAnswerSpeed") and task.get("avgAnswerSpeed") != "--" else None
+            if ans_speed is not None:
+                stats["answer_speed_values"].append(ans_speed)
+        except (ValueError, TypeError):
+            pass
+    
+    # 构建结构化的 prompt
+    lines = []
+    lines.append("# 模型速度测评数据分析请求")
+    lines.append("")
+    lines.append("你是一个专业的 AI 模型性能分析师。请基于以下测评数据，生成一份全面的分析报告。")
+    lines.append("")
+    lines.append("## 测评概览")
+    lines.append(f"- 总任务数: {total_tasks}")
+    lines.append(f"- 已完成: {done_tasks}")
+    lines.append(f"- 运行中: {running_tasks}")
+    lines.append(f"- 错误: {error_tasks}")
+    lines.append(f"- 涉及模型数: {len(models_stats)}")
+    lines.append("")
+    lines.append("## 各模型详细数据")
+    lines.append("")
+    
+    for idx, (model_name, stats) in enumerate(models_stats.items(), 1):
+        lines.append(f"### {idx}. 模型: {model_name}")
+        lines.append(f"- 任务数: {len(stats['tasks'])} (完成: {stats['done_count']}, 错误: {stats['error_count']})")
+        
+        if stats["ttft_values"]:
+            avg_ttft = sum(stats["ttft_values"]) / len(stats["ttft_values"])
+            min_ttft = min(stats["ttft_values"])
+            max_ttft = max(stats["ttft_values"])
+            lines.append(f"- TTFT(首Token时间): 平均 {avg_ttft:.3f}s, 最快 {min_ttft:.3f}s, 最慢 {max_ttft:.3f}s")
+        
+        if stats["tpft_values"]:
+            avg_tpft = sum(stats["tpft_values"]) / len(stats["tpft_values"])
+            min_tpft = min(stats["tpft_values"])
+            max_tpft = max(stats["tpft_values"])
+            lines.append(f"- TPFT(生成时间): 平均 {avg_tpft:.3f}s, 最快 {min_tpft:.3f}s, 最慢 {max_tpft:.3f}s")
+        
+        if stats["speed_values"]:
+            avg_speed = sum(stats["speed_values"]) / len(stats["speed_values"])
+            max_speed = max(stats["speed_values"])
+            lines.append(f"- 速度: 平均 {avg_speed:.1f} t/s, 峰值 {max_speed:.1f} t/s")
+        
+        if stats["answer_speed_values"]:
+            avg_ans_speed = sum(stats["answer_speed_values"]) / len(stats["answer_speed_values"])
+            lines.append(f"- Answer速度: 平均 {avg_ans_speed:.1f} t/s")
+        
+        if stats["token_values"]:
+            avg_tokens = sum(stats["token_values"]) / len(stats["token_values"])
+            lines.append(f"- 输出Token: 平均 {avg_tokens:.1f}")
+        
+        if stats["eval_rates"]:
+            avg_eval = sum(stats["eval_rates"]) / len(stats["eval_rates"])
+            lines.append(f"- 校对评分: 平均 {avg_eval:.1f}/10, 正确 {stats['eval_correct_count']}, 错误 {stats['eval_incorrect_count']}")
+        
+        # 每个任务的具体信息
+        lines.append("")
+        lines.append("  各测试用例表现:")
+        for task in stats["tasks"]:
+            case_name = task.get("case_name", "Unknown")
+            status = task.get("status", "unknown")
+            progress = task.get("progress", 0)
+            avg_ttft = task.get("avgTtft", "--")
+            avg_speed = task.get("avgSpeed", "--")
+            avg_tokens = task.get("avgTokens", "--")
+            eval_rate = task.get("avgEvalRate")
+            
+            status_icon = "✓" if status == "done" else ("✗" if status == "error" else "⟳")
+            eval_str = f", 评分: {eval_rate}/10" if eval_rate is not None else ""
+            lines.append(f"  - [{status_icon}] {case_name}: TTFT={avg_ttft}s, 速度={avg_speed}t/s, Tokens={avg_tokens}, 进度={progress}%{eval_str}")
+        
+        lines.append("")
+    
+    lines.append("## 分析要求")
+    lines.append("")
+    lines.append("请从以下维度进行分析，并以 Markdown 格式输出报告：")
+    lines.append("")
+    lines.append("1. **综合排名**：按综合性能（速度 + 首Token延迟）对所有模型进行排名")
+    lines.append("2. **速度分析**：各模型的吞吐量表现，识别最快和最慢的模型")
+    lines.append("3. **延迟分析**：TTFT（首Token时间）对比，评估响应灵敏度")
+    lines.append("4. **稳定性评估**：错误率、完成率分析，识别不稳定的模型")
+    lines.append("5. **质量评估**：如果存在校对评分数据，分析各模型的输出质量")
+    lines.append("6. **优化建议**：针对速度瓶颈和配置优化提出具体建议")
+    lines.append("7. **总结**：一句话总结本次测评的核心发现")
+    lines.append("")
+    lines.append("请确保报告数据准确、分析客观、建议可落地。")
+    
+    return "\n".join(lines)
+
+
+# ---- 以下 _stream_analysis 已被第一个端点内联替代，未来可考虑迁移到此处 ----
+async def _stream_analysis(prompt: str):
+    """流式调用 MiniMax M2.7 API 并返回 SSE 事件"""
+    
+    api_key = MINIMAX_API_KEY
+    if not api_key:
+        yield f"data: {json.dumps({'type': 'error', 'content': 'MiniMax API Key 未配置，请设置环境变量 MINIMAX_API_KEY'})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        return
+    
+    # 发送开始事件
+    yield f"data: {json.dumps({'type': 'start', 'content': '正在调用 MiniMax M2.7 进行分析...'})}\n\n"
+    
+    payload = {
+        "model": "MiniMax-M2.7",
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "stream": True,
+        "temperature": 0.3,
+        "max_tokens": 4096,
+        "top_p": 0.95
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    full_content = ""
+    
+    try:
+        timeout = aiohttp.ClientTimeout(total=120, connect=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(MINIMAX_API_URL, json=payload, headers=headers) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    yield f"data: {json.dumps({'type': 'error', 'content': f'API 请求失败 (HTTP {response.status}): {error_text[:300]}'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                    return
+                
+                # 流式读取 SSE 响应
+                buffer = ""
+                async for chunk_bytes in response.content.iter_any():
+                    if not chunk_bytes:
+                        continue
+                    
+                    text = chunk_bytes.decode("utf-8", errors="replace")
+                    buffer += text
+                    
+                    # 按行分割处理 SSE 数据
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        line = line.strip()
+                        
+                        if not line or line.startswith(":"):
+                            continue
+                        
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            
+                            if data_str == "[DONE]":
+                                # 分析完成，发送汇总
+                                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                                return
+                            
+                            try:
+                                data = json.loads(data_str)
+                                # MiniMax API 响应格式
+                                choices = data.get("choices", [])
+                                if choices:
+                                    delta = choices[0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    if content:
+                                        full_content += content
+                                        yield f"data: {json.dumps({'type': 'chunk', 'content': content})}\n\n"
+                            except json.JSONDecodeError:
+                                pass
+        
+        # 流结束
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        
+    except aiohttp.ClientError as e:
+        yield f"data: {json.dumps({'type': 'error', 'content': f'网络请求失败: {str(e)}'})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+    except asyncio.TimeoutError:
+        yield f"data: {json.dumps({'type': 'error', 'content': '请求超时（120秒），请稍后重试'})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+    except Exception as e:
+        yield f"data: {json.dumps({'type': 'error', 'content': f'分析过程出错: {str(e)}'})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+
 def run_server(host: str = "0.0.0.0", port: int = 15010, log_level: str = "info"):
     """运行服务器"""
     import uvicorn
@@ -1825,6 +2367,78 @@ async def list_report_templates():
         generator = ReportGenerator()
         templates = generator.list_templates()
         return {"success": True, "data": templates}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/history/{group_id}/report/all")
+async def export_all_reports(group_id: str, template: str = "default"):
+    """一键导出全部报告：PDF + Markdown + Excel，打包为 ZIP"""
+    import io
+    import sys
+    import zipfile
+    try:
+        from .report_generator import ReportGenerator
+        from .excel_exporter import export_to_excel
+        
+        generator = ReportGenerator()
+        zip_buffer = io.BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            # 1. PDF 报告
+            try:
+                pdf_bytes = generator.generate_pdf(group_id, template_name=template)
+                zf.writestr(f"report_{group_id}.pdf", pdf_bytes)
+            except Exception as pdf_err:
+                zf.writestr(f"report_{group_id}_pdf_error.txt", f"PDF 生成失败: {pdf_err}")
+            
+            # 2. Markdown 报告
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent))
+                from src.database import get_database
+                db = get_database()
+                summary_data = db.get_group_summary(group_id)
+                if summary_data:
+                    group_info = summary_data.get('group', {})
+                    model_stats = summary_data.get('model_stats', [])
+                    results = db.get_results(group_id)
+                    total = len(results)
+                    success = sum(1 for r in results if r.get('success'))
+                    success_rate = (success / total * 100) if total > 0 else 0
+                    ttft_values = [r.get('ttft_seconds', 0) for r in results if r.get('ttft_seconds')]
+                    tps_values = [r.get('tokens_per_second', 0) for r in results if r.get('tokens_per_second')]
+                    token_values = [r.get('output_tokens', 0) for r in results if r.get('output_tokens')]
+                    avg_ttft = sum(ttft_values) / len(ttft_values) if ttft_values else 0
+                    avg_tps = sum(tps_values) / len(tps_values) if tps_values else 0
+                    avg_tokens = sum(token_values) / len(token_values) if token_values else 0
+                    summary = {'group_id': group_id, 'start_time': group_info.get('start_time', 'N/A'), 'total': total, 'success': success, 'avg_ttft': avg_ttft, 'avg_tps': avg_tps, 'avg_tokens': avg_tokens}
+                    formatted_stats = []
+                    for stat in model_stats:
+                        count = stat.get('total', 0)
+                        success_count = stat.get('success_count', 0)
+                        formatted_stats.append({'model_name': stat.get('model_name', 'Unknown'), 'count': count, 'success_count': success_count, 'avg_ttft': stat.get('avg_ttft', 0), 'avg_tps': stat.get('avg_tokens_per_second', 0), 'avg_tokens': stat.get('total_output_tokens', 0) / count if count > 0 else 0})
+                    md_content = generator.generate_markdown({"summary": summary, "results": results, "model_stats": formatted_stats}, template_name=template)
+                    zf.writestr(f"report_{group_id}.md", md_content.encode('utf-8'))
+                else:
+                    zf.writestr(f"report_{group_id}_md_error.txt", "测试组不存在")
+            except Exception as md_err:
+                zf.writestr(f"report_{group_id}_md_error.txt", f"Markdown 生成失败: {md_err}")
+            
+            # 3. Excel 报告
+            try:
+                excel_bytes = export_to_excel(group_id)
+                zf.writestr(f"report_{group_id}.xlsx", excel_bytes)
+            except Exception as xl_err:
+                zf.writestr(f"report_{group_id}_xlsx_error.txt", f"Excel 生成失败: {xl_err}")
+        
+        zip_buffer.seek(0)
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename=report_{group_id}_all.zip"}
+        )
+    except ImportError as e:
+        return {"success": False, "error": f"依赖未安装: {str(e)}"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

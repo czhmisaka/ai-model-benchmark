@@ -72,12 +72,13 @@
           <div class="stat-label">总耗时</div>
         </div>
       </div>
-      <div class="export-actions">
-        <button @click="showReportPreview" class="btn-export">📊 预览报告</button>
-        <button @click="exportPDF" class="btn-export btn-pdf">📄 PDF</button>
-        <button @click="exportMarkdown" class="btn-export btn-md">📝 Markdown</button>
-        <button @click="exportExcel" class="btn-export btn-excel">📊 Excel</button>
-      </div>
+        <div class="export-actions">
+          <button @click="showReportPreview" class="btn-export">📊 预览报告</button>
+          <button @click="exportPDF" class="btn-export btn-pdf">📄 PDF</button>
+          <button @click="exportMarkdown" class="btn-export btn-md">📝 Markdown</button>
+          <button @click="exportExcel" class="btn-export btn-excel">📊 Excel</button>
+          <button @click="exportAll" class="btn-export btn-all">📦 一键导出全部</button>
+        </div>
       <button @click="showCharts = true" class="btn-primary">查看图表分析</button>
       <button @click="selectedGroup = null; showCharts = false" class="btn-secondary">返回列表</button>
     </div>
@@ -369,6 +370,12 @@ function exportMarkdown() {
 function exportExcel() {
   if (selectedGroup.value) {
     window.open(`/api/history/${selectedGroup.value.group_id}/report/excel`, "_blank")
+  }
+}
+
+function exportAll() {
+  if (selectedGroup.value) {
+    window.open(`/api/history/${selectedGroup.value.group_id}/report/all`, "_blank")
   }
 }
 

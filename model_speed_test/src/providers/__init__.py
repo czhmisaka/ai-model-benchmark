@@ -45,6 +45,8 @@ def _register_all_providers():
     # OpenAI 兼容 Provider（默认，包含 MiniMax、硅基流动等）
     _provider_registry.register('openai', OpenAIProvider)
     _provider_registry.register('compatible', OpenAIProvider)  # 别名
+    _provider_registry.register('minimax', OpenAIProvider)     # MiniMax 使用 OpenAI 兼容格式
+    _provider_registry.register('custom', OpenAIProvider)     # custom 也使用 OpenAI 兼容格式
     
     # Anthropic Claude
     _provider_registry.register('anthropic', AnthropicProvider)

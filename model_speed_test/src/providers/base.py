@@ -5,9 +5,117 @@ LLM Provider 基类和通用数据结构
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, AsyncIterator
+from typing import List, Dict, Any, Optional, AsyncIterator, Callable
 from datetime import datetime
+from functools import wraps
+import asyncio
+import logging
 import time
+
+logger = logging.getLogger(__name__)
+
+# ============ 重试机制 ============
+
+class RetryConfig:
+    """重试配置"""
+    def __init__(
+        self,
+        max_attempts: int = 3,
+        backoff_factor: float = 2.0,
+        initial_delay: float = 1.0,
+        max_delay: float = 60.0,
+        retryable_errors: tuple = None
+    ):
+        self.max_attempts = max_attempts
+        self.backoff_factor = backoff_factor
+        self.initial_delay = initial_delay
+        self.max_delay = max_delay
+        # 默认重试的错误类型（网络错误、超时等）
+        self.retryable_errors = retryable_errors or (
+            ConnectionError,
+            TimeoutError,
+            asyncio.TimeoutError,
+        )
+
+    def should_retry(self, error: Exception) -> bool:
+        """判断是否应该重试"""
+        return isinstance(error, self.retryable_errors)
+
+    def get_delay(self, attempt: int) -> float:
+        """计算延迟时间（指数退避）"""
+        delay = self.initial_delay * (self.backoff_factor ** attempt)
+        return min(delay, self.max_delay)
+
+
+def with_retry(config: RetryConfig = None):
+    """
+    重试装饰器
+    
+    Args:
+        config: 重试配置，默认 RetryConfig()
+    
+    Example:
+        @with_retry()
+        async def my_function():
+            ...
+    """
+    if config is None:
+        config = RetryConfig()
+    
+    def decorator(func: Callable):
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            last_error = None
+            
+            for attempt in range(config.max_attempts):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    
+                    if attempt < config.max_attempts - 1 and config.should_retry(e):
+                        delay = config.get_delay(attempt)
+                        logger.warning(
+                            f"[Retry] Attempt {attempt + 1}/{config.max_attempts} failed: {e}. "
+                            f"Retrying in {delay:.1f}s..."
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        # 最后一个尝试或不可重试的错误
+                        logger.error(f"[Retry] All {config.max_attempts} attempts failed: {e}")
+                        raise
+            
+            raise last_error
+        
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            last_error = None
+            
+            for attempt in range(config.max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    
+                    if attempt < config.max_attempts - 1 and config.should_retry(e):
+                        delay = config.get_delay(attempt)
+                        logger.warning(
+                            f"[Retry] Attempt {attempt + 1}/{config.max_attempts} failed: {e}. "
+                            f"Retrying in {delay:.1f}s..."
+                        )
+                        import time
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"[Retry] All {config.max_attempts} attempts failed: {e}")
+                        raise
+            
+            raise last_error
+        
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        return sync_wrapper
+    
+    return decorator
 
 
 @dataclass
@@ -22,6 +130,7 @@ class StreamChunk:
     usage: Dict[str, int] = field(default_factory=dict)  # Token使用量
     finish_reason: str = ""              # 结束原因 (stop, length, etc.)
     is_final: bool = False               # 是否是最终块（用于标记流结束）
+    error: Optional[str] = None          # 错误信息（如果有）
     
     def __post_init__(self):
         if self.timestamp == 0.0:
