@@ -3,6 +3,7 @@
 支持多维度评估、答案对比、批量评估
 """
 import json
+import re
 import asyncio
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
@@ -145,8 +146,97 @@ class EvaluationPromptTemplate:
 class AnswerComparator:
     """答案对比器"""
     
+    # 数值提取正则：支持负数、小数、科学计数法
+    NUMBER_PATTERN = re.compile(r'-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?')
+    
     def __init__(self):
         pass
+    
+    def extract_numbers(self, text: str) -> List[float]:
+        """
+        从文本中提取所有数值
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            按出现顺序排列的数值列表
+        """
+        if not text:
+            return []
+        
+        matches = self.NUMBER_PATTERN.findall(text)
+        numbers = []
+        for m in matches:
+            try:
+                numbers.append(float(m))
+            except ValueError:
+                continue
+        return numbers
+    
+    def numeric_match(self, response: str, golden: str, tolerance: float = 0.02) -> float:
+        """
+        数值匹配分数 — 专为数学计算题设计
+        
+        从 response 和 golden 中提取数值，对比最接近的数值对。
+        支持两种模式：
+        1. 如果 golden 是纯数值（如 "-16.95"），在 response 的所有数值中找最接近的那个
+        2. 如果 golden 包含多个数值，逐一匹配
+        
+        Args:
+            response: 模型输出
+            golden: 标准答案
+            tolerance: 相对容差（默认 0.02 即 2%）
+            
+        Returns:
+            0-100 的匹配分数
+        """
+        if not golden or not response:
+            return 0
+        
+        golden_nums = self.extract_numbers(golden)
+        response_nums = self.extract_numbers(response)
+        
+        if not golden_nums:
+            return 0
+        
+        if not response_nums:
+            return 0
+        
+        # 策略：对于 golden 中的每个数值，在 response 中找最接近的
+        total_score = 0.0
+        used_indices = set()
+        
+        for g_num in golden_nums:
+            best_distance = float('inf')
+            best_idx = -1
+            
+            for i, r_num in enumerate(response_nums):
+                if i in used_indices:
+                    continue
+                
+                # 计算相对误差
+                if abs(g_num) < 1e-10:
+                    # golden 接近 0，使用绝对误差
+                    distance = abs(r_num - g_num)
+                else:
+                    distance = abs(r_num - g_num) / abs(g_num)
+                
+                if distance < best_distance:
+                    best_distance = distance
+                    best_idx = i
+            
+            if best_idx >= 0:
+                used_indices.add(best_idx)
+                # 容差内满分，否则按距离衰减
+                if best_distance <= tolerance:
+                    item_score = 100.0
+                else:
+                    # 距离越大分数越低，最低 0
+                    item_score = max(0.0, 100.0 * (1.0 - best_distance / (tolerance * 10)))
+                total_score += item_score
+        
+        return round(total_score / len(golden_nums), 2)
     
     def exact_match(self, response: str, golden: str) -> float:
         """精确匹配分数"""
@@ -185,19 +275,76 @@ class AnswerComparator:
         
         return round(intersection / union * 100, 2) if union > 0 else 0
     
+    def _is_numeric_answer(self, text: str) -> bool:
+        """
+        检测文本是否主要是数值答案
+        
+        判断标准：去除所有空白后，文本仅包含数值字符（数字、小数点、负号）
+        """
+        if not text:
+            return False
+        stripped = text.strip()
+        # 允许像 "-16.95"、""、"" 这样的纯数值格式
+        return bool(re.match(r'^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$', stripped))
+    
     def compare(
         self,
         response: str,
         golden: str,
-        method: str = "keyword"
+        method: str = "auto"
     ) -> Dict[str, float]:
-        """综合对比"""
-        if method == "exact":
+        """
+        综合对比
+        
+        Args:
+            response: 模型输出
+            golden: 标准答案
+            method: 对比方法
+                - "auto": 自动选择最佳方法（数值答案用 numeric，否则用 keyword）
+                - "exact": 精确匹配
+                - "keyword": 关键词匹配
+                - "similarity": 字符相似度
+                - "numeric": 数值匹配（专为数学题设计）
+                
+        Returns:
+            包含 score 和 method 的字典
+        """
+        # "auto" 模式：智能选择
+        if method == "auto":
+            # 先尝试精确匹配
+            exact_score = self.exact_match(response, golden)
+            if exact_score == 100:
+                return {"score": exact_score, "method": "exact"}
+            
+            # 如果 golden 是纯数值，使用数值匹配
+            if self._is_numeric_answer(golden):
+                numeric_score = self.numeric_match(response, golden)
+                if numeric_score > 0:
+                    return {"score": numeric_score, "method": "numeric"}
+            
+            # 如果 golden 包含数值但 response 也包含数值，使用数值匹配
+            golden_nums = self.extract_numbers(golden)
+            response_nums = self.extract_numbers(response)
+            if golden_nums and response_nums:
+                numeric_score = self.numeric_match(response, golden)
+                # 如果数值匹配效果比 keyword 好，使用 numeric
+                keyword_score = self.keyword_match(response, golden)
+                if numeric_score >= keyword_score:
+                    return {"score": numeric_score, "method": "numeric"}
+                else:
+                    return {"score": keyword_score, "method": "keyword"}
+            
+            # 默认使用 keyword
+            return {"score": self.keyword_match(response, golden), "method": "keyword"}
+        
+        elif method == "exact":
             score = self.exact_match(response, golden)
         elif method == "keyword":
             score = self.keyword_match(response, golden)
         elif method == "similarity":
             score = self.similarity(response, golden)
+        elif method == "numeric":
+            score = self.numeric_match(response, golden)
         else:
             # 综合方法
             scores = [

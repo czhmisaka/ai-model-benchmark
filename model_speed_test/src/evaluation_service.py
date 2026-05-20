@@ -44,10 +44,10 @@ class EvaluationService:
         从模型输出中提取纯答案内容，去除 think/分析 部分
         
         支持的格式：
-        1. <think>...</think> 格式
-        2. <think>...</think> 格式
-        3. THINK: ... ANSWER: ... 格式
-        4. 思考过程：... 最终答案：... 格式
+        1. 标签格式: <think>...</think>, <thinking>...</thinking>
+        2. DeepSeek 格式:  标签
+        3. 文本格式: THINK: ... ANSWER: ..., 思考：... 答案：...
+        4. 自动提取：如果内容包含 thinking，按规则清理
         
         Args:
             content: 原始模型输出
@@ -59,57 +59,98 @@ class EvaluationService:
             return ""
         
         original_length = len(content)
+        result = content
         
-        # 1. 去除 <think>...</think> 格式
-        content = re.sub(
-            r'<think>\s*[\s\S]*?\s*</think>',
+        # ── 第1步：提取 <answer> 标签内容（优先级最高）──
+        answer_match = re.search(
+            r'<\s*answer\s*>\s*([\s\S]*?)\s*<\s*/\s*answer\s*>',
+            result,
+            re.IGNORECASE
+        )
+        if answer_match:
+            answer_text = answer_match.group(1).strip()
+            if answer_text:
+                return answer_text
+        
+        # ── 第2步：提取 <response> 标签内容（DeepSeek 标准格式）──
+        response_match = re.search(
+            r'<\s*response\s*>\s*([\s\S]*?)\s*<\s*/\s*response\s*>',
+            result,
+            re.IGNORECASE
+        )
+        if response_match:
+            answer_text = response_match.group(1).strip()
+            if answer_text:
+                return answer_text
+        
+        # ── 第3步：移除  标签及其内容 ──
+        # 注意：支持 <think> 和 <thinking> 两种拼写，支持带空格的格式如 "< think >"
+        result = re.sub(
+            r'<\s*(?:think|thinking)\s*>[\s\S]*?<\s*/\s*(?:think|thinking)\s*>',
             '',
-            content,
+            result,
+            count=0,  # 替换所有
             flags=re.IGNORECASE
         )
         
-        # 2. 去除 <think>...</think> 格式
-        content = re.sub(
-            r'<think>\s*[\s\S]*?\s*</think>',
+        # ── 第4步：处理不完整的 think 标签（只有开头没有结尾）──
+        # 如果文本以 <think 或 <thinking 开始且没有对应结束标签，则截断
+        # 匹配从  开始到文本末尾的所有内容
+        result = re.sub(
+            r'<\s*(?:think|thinking)\s*>[\s\S]*$',
             '',
-            content,
+            result,
+            count=1,
             flags=re.IGNORECASE
         )
         
-        # 3. 去除 [[模型分析]]...[[/模型分析]] 格式
-        content = re.sub(
+        # ── 第5步：移除 DeepSeek 多标签格式中  和  之间的内容 ──
+        # 例如: ...（思考）...（回答正文）
+        # 策略：先把  替换掉，然后看剩下什么
+        result = re.sub(
+            r'<\s*/\s*(?:think|thinking)\s*>[\s\S]*?<\s*response\s*>',
+            '',
+            result,
+            count=0,
+            flags=re.IGNORECASE
+        )
+        
+        # ── 第6步：去除 [[模型分析]]...[[/模型分析]] 格式 ──
+        result = re.sub(
             r'\[\[模型分析\]\]\s*[\s\S]*?\s*\[\[/模型分析\]\]',
             '',
-            content,
+            result,
             flags=re.IGNORECASE
         )
         
-        # 4. 去除各种 THINK/ANSWER 格式中的 THINK 部分
+        # ── 第7步：去除各种文本格式的 THINK 前缀 ──
         think_patterns = [
-            # THINK: xxx ANSWER: yyy -> ANSWER: yyy
-            r'THINK:\s*[\s\S]*?(?=ANSWER:|$)',
-            # 思考: xxx 答案: yyy -> 答案: yyy
-            r'思考[：:]\s*[\s\S]*?(?=答案[：:]|最终答案[：:]|答[：:]|回答[：:]|输出[：:]|=|END|$)',
-            # 分析: xxx 结论: yyy -> 结论: yyy
-            r'分析[：:]\s*[\s\S]*?(?=结论[：:]|答案[：:]|最终答案[：:]|输出[：:])',
-            # 推理过程: xxx 最终答案: yyy -> 最终答案: yyy
-            r'推理过程[：:]\s*[\s\S]*?(?=最终答案[：:]|答案[：:]|输出[：:])',
-            # 推理: xxx 回答: yyy -> 回答: yyy
-            r'推理[：:]\s*[\s\S]*?(?=回答[：:]|答案[：:]|最终答案[：:]|输出[：:])',
+            # THINK: xxx ANSWER: yyy -> 保留 ANSWER: yyy
+            (r'THINK:\s*[\s\S]*?(?=ANSWER:|$)', ''),
+            # 思考：xxx 答案：yyy -> 保留 答案：yyy
+            (r'思考[：:]\s*[\s\S]*?(?=答案[：:]|最终答案[：:]|答[：:]|回答[：:]|输出[：:]|=|END|$)', ''),
+            # 分析：xxx 结论：yyy -> 保留 结论：yyy
+            (r'分析[：:]\s*[\s\S]*?(?=结论[：:]|答案[：:]|最终答案[：:]|输出[：:])', ''),
+            # 推理过程：xxx 最终答案：yyy -> 保留 最终答案：yyy
+            (r'推理过程[：:]\s*[\s\S]*?(?=最终答案[：:]|答案[：:]|输出[：:])', ''),
+            # 推理：xxx 回答：yyy -> 保留 回答：yyy
+            (r'推理[：:]\s*[\s\S]*?(?=回答[：:]|答案[：:]|最终答案[：:]|输出[：:])', ''),
         ]
         
-        for pattern in think_patterns:
-            content = re.sub(pattern, '', content, flags=re.IGNORECASE)
+        for pattern, replacement in think_patterns:
+            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
         
-        # 5. 清理多余空白
-        content = re.sub(r'\n{3,}', '\n\n', content)  # 3个以上换行改为2个
-        content = content.strip()
+        # ── 第8步：清理多余空白 ──
+        result = re.sub(r'\n{3,}', '\n\n', result)  # 3个以上换行改为2个
+        result = result.strip()
         
-        # 如果提取后内容为空或太短，返回原文
-        if not content or len(content) < original_length * 0.1:
-            return content if content else ""
+        # ── 第9步：兜底保护 ──
+        # 如果提取后内容为空或几乎为空（少于原长的10%），返回原文
+        # 这样可以避免"把正确答案当thinking误删"的情况
+        if not result or len(result) < max(original_length * 0.1, 5):
+            return content.strip()
         
-        return content
+        return result
     
     async def verify(
         self,

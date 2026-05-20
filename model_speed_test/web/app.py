@@ -1262,9 +1262,13 @@ async def ai_analysis(request: Request):
                     round_detail = {
                         "轮次": int(round_num),
                         "状态": "成功" if status == "done" else ("失败" if status == "error" else "未运行"),
-                        "TTFT(首Token时间)": f"{metrics.get('ttft_ms', metrics.get('ttft', '-' ))}ms",
-                        "平均生成速度": f"{metrics.get('tokens_per_second', metrics.get('avg_tps', '-'))} tokens/s",
-                        "总耗时": f"{metrics.get('total_time_ms', metrics.get('total_duration', '-'))}ms",
+                        "TTFT(首Token时间s)": metrics.get('ttft_seconds', metrics.get('ttft', '-')),
+                        "TPFT(生成时间s)": metrics.get('tpft_seconds', metrics.get('tpft', '-')),
+                        "总耗时s": metrics.get('total_time_seconds', metrics.get('total_time_ms', metrics.get('total_duration', '-'))),
+                        "输出Token数": metrics.get('output_tokens', '-'),
+                        "输入Token数": metrics.get('input_tokens', '-'),
+                        "输出速度(tokens/s)": metrics.get('tokens_per_second', metrics.get('avg_tps', '-')),
+                        "总时间效率(tokens/s)": metrics.get('total_tokens_per_second', '-'),
                     }
                     
                     # 添加评估结果(如果有)
@@ -1281,16 +1285,39 @@ async def ai_analysis(request: Request):
                 
                 # 汇总统计
                 if all_metrics:
-                    ttfts = [m.get('ttft_ms', m.get('ttft', 0)) for m in all_metrics if m.get('ttft_ms', m.get('ttft', 0)) and isinstance(m.get('ttft_ms', m.get('ttft', 0)), (int, float))]
-                    tps_list = [m.get('tokens_per_second', m.get('avg_tps', 0)) for m in all_metrics if m.get('tokens_per_second', m.get('avg_tps', 0)) and isinstance(m.get('tokens_per_second', m.get('avg_tps', 0)), (int, float))]
-                    total_times = [m.get('total_time_ms', m.get('total_duration', 0)) for m in all_metrics if m.get('total_time_ms', m.get('total_duration', 0)) and isinstance(m.get('total_time_ms', m.get('total_duration', 0)), (int, float))]
+                    def _num(val, default=0):
+                        return val if isinstance(val, (int, float)) else default
+
+                    ttfts = [_num(m.get('ttft_seconds') or m.get('ttft')) for m in all_metrics if _num(m.get('ttft_seconds') or m.get('ttft'))]
+                    tps_list = [_num(m.get('tokens_per_second') or m.get('avg_tps')) for m in all_metrics if _num(m.get('tokens_per_second') or m.get('avg_tps'))]
+                    total_time_vals = [_num(m.get('total_time_seconds') or m.get('total_time_ms') or m.get('total_duration')) for m in all_metrics if _num(m.get('total_time_seconds') or m.get('total_time_ms') or m.get('total_duration'))]
+                    output_tokens_list = [_num(m.get('output_tokens')) for m in all_metrics if _num(m.get('output_tokens'))]
+                    total_tps_list = [_num(m.get('total_tokens_per_second')) for m in all_metrics if _num(m.get('total_tokens_per_second'))]
                     
                     if ttfts:
-                        task_info["TTFT统计"] = f"平均: {sum(ttfts)/len(ttfts):.0f}ms, 最快: {min(ttfts):.0f}ms, 最慢: {max(ttfts):.0f}ms"
+                        task_info["TTFT统计"] = f"平均: {sum(ttfts)/len(ttfts):.3f}s, 最快: {min(ttfts):.3f}s, 最慢: {max(ttfts):.3f}s"
                     if tps_list:
                         task_info["TPS统计"] = f"平均: {sum(tps_list)/len(tps_list):.1f} t/s, 最快: {max(tps_list):.1f} t/s, 最慢: {min(tps_list):.1f} t/s"
-                    if total_times:
-                        task_info["总耗时统计"] = f"平均: {sum(total_times)/len(total_times):.0f}ms, 最短: {min(total_times):.0f}ms, 最长: {max(total_times):.0f}ms"
+                    if total_time_vals:
+                        task_info["总耗时统计"] = f"平均: {sum(total_time_vals)/len(total_time_vals):.3f}s, 最短: {min(total_time_vals):.3f}s, 最长: {max(total_time_vals):.3f}s"
+                    if output_tokens_list:
+                        task_info["输出Token统计"] = f"平均: {sum(output_tokens_list)/len(output_tokens_list):.0f} tokens/轮, 最少: {min(output_tokens_list)}, 最多: {max(output_tokens_list)}"
+                    if total_tps_list:
+                        task_info["总时间效率统计"] = f"平均: {sum(total_tps_list)/len(total_tps_list):.1f} t/s (基于总耗时,含首Token等待)"
+                    
+                    # 关键效率指标：纯生成速度(排除首Token等待)
+                    tpft_token_pairs = [(m.get('tpft_seconds', m.get('tpft', 0)), m.get('output_tokens', 0)) for m in all_metrics if m.get('output_tokens', 0)]
+                    if tpft_token_pairs:
+                        gen_eff = [tokens / tpft for tpft, tokens in tpft_token_pairs if tpft and tpft > 0]
+                        if gen_eff:
+                            task_info["纯生成效率(排除首Token)"] = f"平均: {sum(gen_eff)/len(gen_eff):.1f} t/s"
+                    
+                    # 任务完成效率：总耗时 vs 输出量
+                    time_token_pairs = [(m.get('total_time_seconds', m.get('total_time_ms', m.get('total_duration', 0))), m.get('output_tokens', 0)) for m in all_metrics if m.get('output_tokens', 0)]
+                    if time_token_pairs:
+                        task_eff = [tokens / total_t for total_t, tokens in time_token_pairs if total_t and total_t > 0]
+                        if task_eff:
+                            task_info["任务完成效率(整体)"] = f"平均: {sum(task_eff)/len(task_eff):.1f} t/s (从发起请求到完成的总效率,含首Token等待)"
                 
                 prompt_data.append(task_info)
             
@@ -1300,29 +1327,49 @@ async def ai_analysis(request: Request):
             # 构建分析 system prompt
             system_prompt = """你是一位专业的 AI 模型性能分析师。请基于提供的测评任务数据,生成一份详细的中文Markdown分析报告。
 
+## 核心分析理念：任务完成效率 > 纯输出速度
+- **不只看谁输出得快,更看谁在相同任务下完成得又快又好**
+- 一个模型可能输出速度(tokens/s)很高,但如果它废话连篇、输出大量无用 token,完成同样任务反而需要更长时间——这不是好模型
+- **关键评价指标**:
+  * 总耗时(total_time_seconds)：从发起请求到收到完整回复的总时间,这是用户体感最直接的指标
+  * 任务完成效率(整体) = 输出Token数 / 总耗时——衡量从开始到结束的综合产出效率
+  * 纯生成效率(排除首Token) = 输出Token数 / TPFT——衡量模型"想清楚后"的纯生成速度
+  * 输出Token数：同样是完成一个任务,Token越少越精炼越好(前提是成功完成任务)
+  * 首Token时间(TTFT)：用户感知的"首次响应"速度,越低越好
+  * 成功率：任务是否成功完成
+
 ## 报告结构要求:
 
 ### 1. 执行摘要
 - 概括本次测试的整体情况
+- 用 ⭐ 标记任务完成效率最高的模型(基于总耗时)
 - 一句话总结各模型的综合表现排名
 
 ### 2. 各模型详细分析
 针对每个模型:
-- **综合得分与排名**
-- **速度表现**: 首Token时间(TTFT)和生成速度(TPS)的统计分析
+- **综合得分与排名**: 综合成功率、总耗时、输出精炼度进行评分
+- **任务完成效率**: 总耗时 vs 输出Token 的关系分析(重点!)
+  - 如果总耗时低且输出Token合理 → 高效模型
+  - 如果总耗时高但输出Token远超其他模型 → 可能存在"废话多"的问题
+  - 如果总耗时高且输出Token少 → 生成速度慢
+- **速度快照**: TTFT(首Token)、TPFT(生成阶段)、纯生成效率
 - **稳定性分析**: 成功率、速度波动情况
 - **评估结果**: 如果有评估数据,分析回复质量
-- **优势与不足**
+- **优势与不足**: 特别指出"废话多但快"或"比较慢但言简意赅"等特征
 
 ### 3. 对比分析
-- 模型间横向对比(用表格呈现)
+- 所有模型的任务完成效率对比表(总耗时、输出Token数、任务完成效率并列)
 - 不同测试用例下的表现差异
+- 给出「最佳效率模型」和「最快输出模型」的区分
 
-### 4. 改进建议
-- 基于数据给出的模型选择建议
-- 可优化的方向
+### 4. 选型建议
+- 如果追求"用户体感最好的响应速度"→ 推荐总耗时最短的模型
+- 如果追求"性价比(按Token计费)"→ 推荐输出精炼度高的模型
+- 如果追求"首Token响应快"→ 推荐TTFT最低的模型
+- 不同场景下的最佳选择
 
 ### 5. 结论
+- 用一句话总结:哪个模型在「又快又好地完成任务」上表现最佳
 - 最终推荐和理由
 
 ## 格式要求:
@@ -1330,6 +1377,7 @@ async def ai_analysis(request: Request):
 - 关键数据用 **加粗** 标记
 - 使用表格进行数据对比
 - 使用 ✅ ⚠️ ❌ 标记表现好坏
+- 使用 ⭐ 标记最佳表现
 - 语言:中文
 - 报告末尾加上: *--- AI 分析报告由 MiniMax M2.7 生成 ---*"""
 
@@ -2014,287 +2062,6 @@ async def get_models():
 
 # 挂载前端静态文件
 app.mount("/assets", StaticFiles(directory=str(Path(__file__).parent.parent / "frontend" / "dist" / "assets")), "assets")
-
-
-# ===== AI 智能分析辅助函数 =====
-
-import aiohttp
-
-async def _error_sse(message: str):
-    """生成错误 SSE 响应"""
-    yield f"data: {json.dumps({'type': 'error', 'content': message})}\n\n"
-    yield f"data: {json.dumps({'type': 'done'})}\n\n"
-
-
-def _build_analysis_prompt(tasks: list) -> str:
-    """根据任务数据构建发给 MiniMax M2.7 的分析 prompt"""
-    
-    # 统计概览
-    total_tasks = len(tasks)
-    done_tasks = sum(1 for t in tasks if t.get("status") == "done")
-    running_tasks = sum(1 for t in tasks if t.get("status") == "running")
-    error_tasks = sum(1 for t in tasks if t.get("status") == "error")
-    
-    # 收集所有模型的指标
-    models_stats = {}
-    for task in tasks:
-        model_name = task.get("model_name", "Unknown")
-        case_name = task.get("case_name", "Unknown")
-        
-        if model_name not in models_stats:
-            models_stats[model_name] = {
-                "tasks": [],
-                "ttft_values": [],
-                "tpft_values": [],
-                "speed_values": [],
-                "token_values": [],
-                "eval_rates": [],
-                "error_count": 0,
-                "done_count": 0,
-                "eval_correct_count": 0,
-                "eval_incorrect_count": 0,
-                "answer_speed_values": [],
-                "think_token_values": [],
-                "answer_token_values": [],
-            }
-        
-        stats = models_stats[model_name]
-        stats["tasks"].append(task)
-        
-        if task.get("status") == "done":
-            stats["done_count"] += 1
-        elif task.get("status") == "error":
-            stats["error_count"] += 1
-        
-        # 解析数值型指标
-        try:
-            ttft = float(task.get("avgTtft", 0)) if task.get("avgTtft") and task.get("avgTtft") != "--" else None
-            if ttft is not None:
-                stats["ttft_values"].append(ttft)
-        except (ValueError, TypeError):
-            pass
-        
-        try:
-            tpft = float(task.get("avgTpft", 0)) if task.get("avgTpft") and task.get("avgTpft") != "--" else None
-            if tpft is not None:
-                stats["tpft_values"].append(tpft)
-        except (ValueError, TypeError):
-            pass
-        
-        try:
-            speed = float(task.get("avgSpeed", 0)) if task.get("avgSpeed") and task.get("avgSpeed") != "--" else None
-            if speed is not None:
-                stats["speed_values"].append(speed)
-        except (ValueError, TypeError):
-            pass
-        
-        try:
-            tokens = float(task.get("avgTokens", 0)) if task.get("avgTokens") and task.get("avgTokens") != "--" else None
-            if tokens is not None:
-                stats["token_values"].append(tokens)
-        except (ValueError, TypeError):
-            pass
-        
-        # 校对评分数据
-        eval_rate = task.get("avgEvalRate")
-        if eval_rate is not None:
-            try:
-                stats["eval_rates"].append(float(eval_rate))
-            except (ValueError, TypeError):
-                pass
-        
-        if task.get("evalCorrectCount"):
-            stats["eval_correct_count"] += int(task["evalCorrectCount"])
-        if task.get("evalIncorrectCount"):
-            stats["eval_incorrect_count"] += int(task["evalIncorrectCount"])
-        
-        # Answer速度
-        try:
-            ans_speed = float(task.get("avgAnswerSpeed", 0)) if task.get("avgAnswerSpeed") and task.get("avgAnswerSpeed") != "--" else None
-            if ans_speed is not None:
-                stats["answer_speed_values"].append(ans_speed)
-        except (ValueError, TypeError):
-            pass
-    
-    # 构建结构化的 prompt
-    lines = []
-    lines.append("# 模型速度测评数据分析请求")
-    lines.append("")
-    lines.append("你是一个专业的 AI 模型性能分析师。请基于以下测评数据，生成一份全面的分析报告。")
-    lines.append("")
-    lines.append("## 测评概览")
-    lines.append(f"- 总任务数: {total_tasks}")
-    lines.append(f"- 已完成: {done_tasks}")
-    lines.append(f"- 运行中: {running_tasks}")
-    lines.append(f"- 错误: {error_tasks}")
-    lines.append(f"- 涉及模型数: {len(models_stats)}")
-    lines.append("")
-    lines.append("## 各模型详细数据")
-    lines.append("")
-    
-    for idx, (model_name, stats) in enumerate(models_stats.items(), 1):
-        lines.append(f"### {idx}. 模型: {model_name}")
-        lines.append(f"- 任务数: {len(stats['tasks'])} (完成: {stats['done_count']}, 错误: {stats['error_count']})")
-        
-        if stats["ttft_values"]:
-            avg_ttft = sum(stats["ttft_values"]) / len(stats["ttft_values"])
-            min_ttft = min(stats["ttft_values"])
-            max_ttft = max(stats["ttft_values"])
-            lines.append(f"- TTFT(首Token时间): 平均 {avg_ttft:.3f}s, 最快 {min_ttft:.3f}s, 最慢 {max_ttft:.3f}s")
-        
-        if stats["tpft_values"]:
-            avg_tpft = sum(stats["tpft_values"]) / len(stats["tpft_values"])
-            min_tpft = min(stats["tpft_values"])
-            max_tpft = max(stats["tpft_values"])
-            lines.append(f"- TPFT(生成时间): 平均 {avg_tpft:.3f}s, 最快 {min_tpft:.3f}s, 最慢 {max_tpft:.3f}s")
-        
-        if stats["speed_values"]:
-            avg_speed = sum(stats["speed_values"]) / len(stats["speed_values"])
-            max_speed = max(stats["speed_values"])
-            lines.append(f"- 速度: 平均 {avg_speed:.1f} t/s, 峰值 {max_speed:.1f} t/s")
-        
-        if stats["answer_speed_values"]:
-            avg_ans_speed = sum(stats["answer_speed_values"]) / len(stats["answer_speed_values"])
-            lines.append(f"- Answer速度: 平均 {avg_ans_speed:.1f} t/s")
-        
-        if stats["token_values"]:
-            avg_tokens = sum(stats["token_values"]) / len(stats["token_values"])
-            lines.append(f"- 输出Token: 平均 {avg_tokens:.1f}")
-        
-        if stats["eval_rates"]:
-            avg_eval = sum(stats["eval_rates"]) / len(stats["eval_rates"])
-            lines.append(f"- 校对评分: 平均 {avg_eval:.1f}/10, 正确 {stats['eval_correct_count']}, 错误 {stats['eval_incorrect_count']}")
-        
-        # 每个任务的具体信息
-        lines.append("")
-        lines.append("  各测试用例表现:")
-        for task in stats["tasks"]:
-            case_name = task.get("case_name", "Unknown")
-            status = task.get("status", "unknown")
-            progress = task.get("progress", 0)
-            avg_ttft = task.get("avgTtft", "--")
-            avg_speed = task.get("avgSpeed", "--")
-            avg_tokens = task.get("avgTokens", "--")
-            eval_rate = task.get("avgEvalRate")
-            
-            status_icon = "✓" if status == "done" else ("✗" if status == "error" else "⟳")
-            eval_str = f", 评分: {eval_rate}/10" if eval_rate is not None else ""
-            lines.append(f"  - [{status_icon}] {case_name}: TTFT={avg_ttft}s, 速度={avg_speed}t/s, Tokens={avg_tokens}, 进度={progress}%{eval_str}")
-        
-        lines.append("")
-    
-    lines.append("## 分析要求")
-    lines.append("")
-    lines.append("请从以下维度进行分析，并以 Markdown 格式输出报告：")
-    lines.append("")
-    lines.append("1. **综合排名**：按综合性能（速度 + 首Token延迟）对所有模型进行排名")
-    lines.append("2. **速度分析**：各模型的吞吐量表现，识别最快和最慢的模型")
-    lines.append("3. **延迟分析**：TTFT（首Token时间）对比，评估响应灵敏度")
-    lines.append("4. **稳定性评估**：错误率、完成率分析，识别不稳定的模型")
-    lines.append("5. **质量评估**：如果存在校对评分数据，分析各模型的输出质量")
-    lines.append("6. **优化建议**：针对速度瓶颈和配置优化提出具体建议")
-    lines.append("7. **总结**：一句话总结本次测评的核心发现")
-    lines.append("")
-    lines.append("请确保报告数据准确、分析客观、建议可落地。")
-    
-    return "\n".join(lines)
-
-
-# ---- 以下 _stream_analysis 已被第一个端点内联替代，未来可考虑迁移到此处 ----
-async def _stream_analysis(prompt: str):
-    """流式调用 MiniMax M2.7 API 并返回 SSE 事件"""
-    
-    api_key = MINIMAX_API_KEY
-    if not api_key:
-        yield f"data: {json.dumps({'type': 'error', 'content': 'MiniMax API Key 未配置，请设置环境变量 MINIMAX_API_KEY'})}\n\n"
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        return
-    
-    # 发送开始事件
-    yield f"data: {json.dumps({'type': 'start', 'content': '正在调用 MiniMax M2.7 进行分析...'})}\n\n"
-    
-    payload = {
-        "model": "MiniMax-M2.7",
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        "stream": True,
-        "temperature": 0.3,
-        "max_tokens": 4096,
-        "top_p": 0.95
-    }
-    
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    full_content = ""
-    
-    try:
-        timeout = aiohttp.ClientTimeout(total=120, connect=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(MINIMAX_API_URL, json=payload, headers=headers) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    yield f"data: {json.dumps({'type': 'error', 'content': f'API 请求失败 (HTTP {response.status}): {error_text[:300]}'})}\n\n"
-                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                    return
-                
-                # 流式读取 SSE 响应
-                buffer = ""
-                async for chunk_bytes in response.content.iter_any():
-                    if not chunk_bytes:
-                        continue
-                    
-                    text = chunk_bytes.decode("utf-8", errors="replace")
-                    buffer += text
-                    
-                    # 按行分割处理 SSE 数据
-                    while "\n" in buffer:
-                        line, buffer = buffer.split("\n", 1)
-                        line = line.strip()
-                        
-                        if not line or line.startswith(":"):
-                            continue
-                        
-                        if line.startswith("data: "):
-                            data_str = line[6:]
-                            
-                            if data_str == "[DONE]":
-                                # 分析完成，发送汇总
-                                yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                                return
-                            
-                            try:
-                                data = json.loads(data_str)
-                                # MiniMax API 响应格式
-                                choices = data.get("choices", [])
-                                if choices:
-                                    delta = choices[0].get("delta", {})
-                                    content = delta.get("content", "")
-                                    if content:
-                                        full_content += content
-                                        yield f"data: {json.dumps({'type': 'chunk', 'content': content})}\n\n"
-                            except json.JSONDecodeError:
-                                pass
-        
-        # 流结束
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        
-    except aiohttp.ClientError as e:
-        yield f"data: {json.dumps({'type': 'error', 'content': f'网络请求失败: {str(e)}'})}\n\n"
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-    except asyncio.TimeoutError:
-        yield f"data: {json.dumps({'type': 'error', 'content': '请求超时（120秒），请稍后重试'})}\n\n"
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-    except Exception as e:
-        yield f"data: {json.dumps({'type': 'error', 'content': f'分析过程出错: {str(e)}'})}\n\n"
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-
 
 def run_server(host: str = "0.0.0.0", port: int = 15010, log_level: str = "info"):
     """运行服务器"""

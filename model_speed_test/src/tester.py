@@ -60,7 +60,8 @@ class ModelTester:
         Returns:
             TestResult对象
         """
-        max_tokens = self.test_config.get("max_tokens", 500)
+        # max_tokens 固定为 -1（不限制），测试 case 不可调整
+        max_tokens = -1
         temperature = self.test_config.get("temperature", 0.7)
         stream = self.test_config.get("stream", True)
         
@@ -158,34 +159,45 @@ class ModelTester:
                 # 构建 chunk 内容（包含 reasoning_content 和 content）
                 chunk_content = chunk.content
                 chunk_reasoning = getattr(chunk, 'reasoning_content', None)
+                # 透传 API 返回的 usage（通常是最后一个 chunk 携带精确 token 统计）
+                chunk_usage = getattr(chunk, 'usage', None)
                 
                 # 如果有 reasoning_content，也加入 chunks 用于 metrics 计算
                 if chunk_reasoning:
-                    chunks.append({
+                    base_entry = {
                         "content": chunk_reasoning,
                         "is_first": chunk.is_first and not chunk_reasoning,
                         "timestamp": chunk.timestamp,
                         "is_think": True,
                         "is_think_end": False,
                         "reasoning_content": chunk_reasoning
-                    })
+                    }
+                    if chunk_usage is not None:
+                        base_entry["usage"] = chunk_usage
+                    chunks.append(base_entry)
                     # answer 部分作为单独的 chunk
                     if chunk_content:
-                        chunks.append({
+                        answer_entry = {
                             "content": chunk_content,
                             "is_first": False,
                             "timestamp": chunk.timestamp + 0.001,  # 稍微延后
                             "is_think": False,
                             "is_think_end": chunk.is_think_end
-                        })
+                        }
+                        if chunk_usage is not None:
+                            answer_entry["usage"] = chunk_usage
+                        chunks.append(answer_entry)
                 else:
-                    chunks.append({
+                    entry = {
                         "content": chunk.content,
                         "is_first": chunk.is_first,
                         "timestamp": chunk.timestamp,
                         "is_think": chunk.is_think,
                         "is_think_end": chunk.is_think_end
-                    })
+                    }
+                    if chunk_usage is not None:
+                        entry["usage"] = chunk_usage
+                    chunks.append(entry)
                 
                 # 分别记录 think 和 answer 内容
                 # 优先使用 reasoning_content 判断

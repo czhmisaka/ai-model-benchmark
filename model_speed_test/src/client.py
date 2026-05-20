@@ -131,6 +131,7 @@ class ModelClient:
                 
                 if chunk.reasoning_content:
                     reasoning_content += chunk.reasoning_content
+                    full_content += chunk.reasoning_content
                 
                 full_content += chunk.content
                 

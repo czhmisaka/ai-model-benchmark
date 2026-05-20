@@ -67,8 +67,12 @@ class OpenAIProvider(BaseLLMProvider):
             "stream": stream,
             "temperature": kwargs.get("temperature", self.config.temperature),
             "top_p": kwargs.get("top_p", self.config.top_p),
-            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
         }
+        
+        # max_tokens: -1 表示不限制，不发送该参数
+        max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
+        if max_tokens and max_tokens > 0:
+            payload["max_tokens"] = max_tokens
 
         # 添加可选参数
         if self.config.presence_penalty != 0:
