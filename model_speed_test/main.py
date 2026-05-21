@@ -766,13 +766,15 @@ class WebAwareTester:
             # 开始计时
             start_time = asyncio.get_event_loop().time()
             full_content = ""
+            think_content_str = ""
+            answer_content_str = ""
             first_token_time = None
             stream_completed = False
-            
+
             try:
                 # 使用 asyncio.wait_for 添加超时控制
                 async def stream_with_timeout():
-                    nonlocal full_content, first_token_time, stream_completed
+                    nonlocal full_content, think_content_str, answer_content_str, first_token_time, stream_completed
                     try:
                         async for chunk in tester.client.chat_stream(
                             prompt=None,
@@ -792,6 +794,12 @@ class WebAwareTester:
                                 first_token_time = current_time - start_time
 
                             full_content += chunk.content
+
+                            # 分离 think 和 answer 内容
+                            if chunk.is_think:
+                                think_content_str += chunk.content
+                            else:
+                                answer_content_str += chunk.content
 
                             # 推送流式块（包含轮次信息）
                             if self.enable_web:
@@ -837,7 +845,9 @@ class WebAwareTester:
                             success=False,
                             group_id=self.group_id,
                             prompt=display_prompt,
-                            response="Test interrupted"
+                            response="Test interrupted",
+                            think_content=think_content_str,
+                            answer_content=answer_content_str
                         )
                     result = type('TestResult', (), {
                         'success': False,
@@ -896,7 +906,9 @@ class WebAwareTester:
                             success=False,
                             group_id=self.group_id,
                             prompt=display_prompt,
-                            response=full_content or "No output"
+                            response=full_content or "No output",
+                            think_content=think_content_str,
+                            answer_content=answer_content_str
                         )
                     result = type('TestResult', (), {
                         'success': False,
@@ -985,7 +997,9 @@ class WebAwareTester:
                         group_id=self.group_id,
                         prompt=display_prompt,
                         response=full_content,
-                        evaluation=evaluation_result
+                        evaluation=evaluation_result,
+                        think_content=think_content_str,
+                        answer_content=answer_content_str
                     )
                     
             except Exception as e:
@@ -1016,7 +1030,9 @@ class WebAwareTester:
                         success=False,  # 标记为失败
                         group_id=self.group_id,
                         prompt=display_prompt,
-                        response=f"Error: {error_msg}"
+                        response=f"Error: {error_msg}",
+                        think_content=think_content_str,
+                        answer_content=answer_content_str
                     )
                 
                 # 记录失败结果到 recorder（保存到文件）

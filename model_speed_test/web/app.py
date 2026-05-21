@@ -1313,11 +1313,22 @@ async def ai_analysis(request: Request):
                             task_info["纯生成效率(排除首Token)"] = f"平均: {sum(gen_eff)/len(gen_eff):.1f} t/s"
                     
                     # 任务完成效率：总耗时 vs 输出量
+                    # 正确理念：在成功完成同一任务的前提下，总耗时越短越好，输出 Token 越少越好
+                    # 因此传递原始数据（总耗时 + 输出Token），由 AI 综合判断，而非简单做除法
                     time_token_pairs = [(m.get('total_time_seconds', m.get('total_time_ms', m.get('total_duration', 0))), m.get('output_tokens', 0)) for m in all_metrics if m.get('output_tokens', 0)]
                     if time_token_pairs:
-                        task_eff = [tokens / total_t for total_t, tokens in time_token_pairs if total_t and total_t > 0]
-                        if task_eff:
-                            task_info["任务完成效率(整体)"] = f"平均: {sum(task_eff)/len(task_eff):.1f} t/s (从发起请求到完成的总效率,含首Token等待)"
+                        total_times = [total_t for total_t, _ in time_token_pairs if total_t and total_t > 0]
+                        output_tokens_list = [tokens for _, tokens in time_token_pairs if tokens > 0]
+                        if total_times:
+                            task_info["平均总耗时"] = f"平均: {sum(total_times)/len(total_times):.3f}s, 最短: {min(total_times):.3f}s, 最长: {max(total_times):.3f}s"
+                        if output_tokens_list:
+                            task_info["平均输出Token"] = f"平均: {sum(output_tokens_list)/len(output_tokens_list):.0f} tokens/轮, 最少: {min(output_tokens_list)}, 最多: {max(output_tokens_list)}"
+                        # 综合效率评分：总耗时越短 + Token越少 → 综合效率越高
+                        # 使用归一化后的反比指标：1/(归一化总耗时 * 归一化Token数)
+                        if total_times and output_tokens_list:
+                            avg_time = sum(total_times) / len(total_times)
+                            avg_tokens = sum(output_tokens_list) / len(output_tokens_list)
+                            task_info["综合效率指标说明"] = "在成功完成同一任务的前提下，总耗时越短且输出Token越少 = 任务完成效率越高。请综合这两个维度判断，不要仅凭 tokens/s 做判断。"
                 
                 prompt_data.append(task_info)
             
@@ -1327,44 +1338,53 @@ async def ai_analysis(request: Request):
             # 构建分析 system prompt
             system_prompt = """你是一位专业的 AI 模型性能分析师。请基于提供的测评任务数据,生成一份详细的中文Markdown分析报告。
 
-## 核心分析理念：任务完成效率 > 纯输出速度
-- **不只看谁输出得快,更看谁在相同任务下完成得又快又好**
-- 一个模型可能输出速度(tokens/s)很高,但如果它废话连篇、输出大量无用 token,完成同样任务反而需要更长时间——这不是好模型
-- **关键评价指标**:
-  * 总耗时(total_time_seconds)：从发起请求到收到完整回复的总时间,这是用户体感最直接的指标
-  * 任务完成效率(整体) = 输出Token数 / 总耗时——衡量从开始到结束的综合产出效率
+## 核心分析理念：任务完成效率 = 总耗时越短 + Token越少 = 越好
+- **任务完成效率的正确定义**：在确保任务成功完成的前提下，总耗时（total_time_seconds）越短、输出 Token 数越少，任务完成效率越高。
+- **重要：token/s 速度高 ≠ 效率高！** 一个模型可能每秒输出很多 token（tokens/s 高），但如果它废话连篇、输出大量无用 token，同样任务的总耗时反而更长——这不是好模型。
+- **评价一个模型是否高效，必须同时看两个维度**：
+  * 总耗时（total_time_seconds）：从发起请求到收到完整回复的总时间，这是用户体感最直接的指标，越短越好
+  * 输出 Token 数：完成同一任务所消耗的 Token，越少说明模型越精炼、回答越简洁高效（前提是成功完成任务）
+  * 综合判断规则：总耗时越短 且 输出Token越少 → 任务完成效率越高（两者缺一不可）
+  * 如果一个模型总耗时短但 Token 很少 → 非常高效（又快又精炼）
+  * 如果一个模型总耗时短但 Token 很多 → 虽然快但可能废话多（效率一般）
+  * 如果一个模型总耗时长但 Token 很少 → 生成速度慢但回答精炼（效率较低）
+  * 如果一个模型总耗时长且 Token 也很多 → 效率最低
+- **其他辅助指标**：
   * 纯生成效率(排除首Token) = 输出Token数 / TPFT——衡量模型"想清楚后"的纯生成速度
-  * 输出Token数：同样是完成一个任务,Token越少越精炼越好(前提是成功完成任务)
-  * 首Token时间(TTFT)：用户感知的"首次响应"速度,越低越好
-  * 成功率：任务是否成功完成
+  * 首Token时间(TTFT)：用户感知的"首次响应"速度，越低越好
+  * 成功率：任务是否成功完成（未完成的模型不应参与效率排名）
 
 ## 报告结构要求:
 
 ### 1. 执行摘要
 - 概括本次测试的整体情况
-- 用 ⭐ 标记任务完成效率最高的模型(基于总耗时)
+- **用 ⭐ 标记任务完成效率最高的模型（综合考虑总耗时最短 + 输出Token最精炼）**
 - 一句话总结各模型的综合表现排名
 
 ### 2. 各模型详细分析
 针对每个模型:
-- **综合得分与排名**: 综合成功率、总耗时、输出精炼度进行评分
-- **任务完成效率**: 总耗时 vs 输出Token 的关系分析(重点!)
-  - 如果总耗时低且输出Token合理 → 高效模型
-  - 如果总耗时高但输出Token远超其他模型 → 可能存在"废话多"的问题
-  - 如果总耗时高且输出Token少 → 生成速度慢
+- **综合得分与排名**: 综合成功率、总耗时、输出精炼度（Token越少越好）进行评分
+- **任务完成效率分析**(重点!):
+  - 列出平均总耗时和平均输出Token数
+  - 综合判断：总耗时越短 + Token越少 → 效率越高
+  - 如果总耗时最短且输出Token也最少 → ✅ 最佳效率模型
+  - 如果总耗时短但输出Token偏多 → ⚠️ 速度快但不够精炼（有"废话多"嫌疑）
+  - 如果总耗时长但输出Token少 → ⚠️ 回答精炼但生成速度慢
+  - 如果总耗时长且输出Token多 → ❌ 效率低下
 - **速度快照**: TTFT(首Token)、TPFT(生成阶段)、纯生成效率
-- **稳定性分析**: 成功率、速度波动情况
+- **稳定性分析**: 成功率、速度波动情况（最大值/最小值差异）
 - **评估结果**: 如果有评估数据,分析回复质量
 - **优势与不足**: 特别指出"废话多但快"或"比较慢但言简意赅"等特征
 
 ### 3. 对比分析
-- 所有模型的任务完成效率对比表(总耗时、输出Token数、任务完成效率并列)
+- 所有模型的任务完成效率对比表（**总耗时、输出Token数两列并列展示**，不要合并为单一 t/s 数值）
 - 不同测试用例下的表现差异
-- 给出「最佳效率模型」和「最快输出模型」的区分
+- 给出「最佳效率模型」（总耗时短 + Token少）和「最快输出模型」（tokens/s最高）的明确区分
 
 ### 4. 选型建议
 - 如果追求"用户体感最好的响应速度"→ 推荐总耗时最短的模型
-- 如果追求"性价比(按Token计费)"→ 推荐输出精炼度高的模型
+- 如果追求"性价比(按Token计费)"→ 推荐输出精炼度高（输出Token最少）的模型
+- 如果追求"又快又省的综合效率"→ 推荐总耗时短且输出Token少的模型
 - 如果追求"首Token响应快"→ 推荐TTFT最低的模型
 - 不同场景下的最佳选择
 
@@ -1375,7 +1395,7 @@ async def ai_analysis(request: Request):
 ## 格式要求:
 - 使用标准 Markdown 格式
 - 关键数据用 **加粗** 标记
-- 使用表格进行数据对比
+- 使用表格进行数据对比（对比表必须同时展示总耗时和输出Token两列）
 - 使用 ✅ ⚠️ ❌ 标记表现好坏
 - 使用 ⭐ 标记最佳表现
 - 语言:中文

@@ -2957,6 +2957,15 @@ function handleEvent(event: any) {
           tasks.value[taskId].sub_tasks[subTaskId].output = data.response
           console.log('[complete] response saved, length:', data.response.length)
         }
+        // 保存分离的 think 和 answer 内容
+        if (data.think_content) {
+          tasks.value[taskId].sub_tasks[subTaskId].think_content = data.think_content
+          console.log('[complete] think_content saved, length:', data.think_content.length)
+        }
+        if (data.answer_content) {
+          tasks.value[taskId].sub_tasks[subTaskId].answer_content = data.answer_content
+          console.log('[complete] answer_content saved, length:', data.answer_content.length)
+        }
         // 保存校对结果（如果存在）
         if (data.evaluation) {
           tasks.value[taskId].sub_tasks[subTaskId].evaluation = data.evaluation
@@ -3111,9 +3120,12 @@ async function loadTestState() {
           tasks.value[taskId].sub_tasks[subId] = {
             name: `Round ${roundKey}/${totalRounds}`,
             output: roundData.output || '',
+            prompt: roundData.prompt || '',
             status: roundData.status || 'pending',
             metrics: metrics,
-            evaluation: roundData.evaluation || undefined
+            evaluation: roundData.evaluation || undefined,
+            think_content: roundData.think_content || undefined,
+            answer_content: roundData.answer_content || undefined
           }
           
           if (roundData.status === 'done') {

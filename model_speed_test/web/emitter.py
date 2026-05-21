@@ -360,7 +360,9 @@ class TestEventEmitter:
         group_id: str = None,
         prompt: str = None,
         response: str = None,
-        evaluation: Dict[str, Any] = None
+        evaluation: Dict[str, Any] = None,
+        think_content: str = None,
+        answer_content: str = None
     ):
         """发射单次测试完成事件"""
         # 更新任务状态 - 保存完整输出
@@ -376,6 +378,12 @@ class TestEventEmitter:
         if round_key in task["rounds"]:
             task["rounds"][round_key]["status"] = "done" if success else "error"
             task["rounds"][round_key]["metrics"] = metrics.to_dict() if hasattr(metrics, 'to_dict') else metrics
+            # 保存 prompt 和完整输出（用 response 参数覆盖流式累加的输出）
+            task["rounds"][round_key]["prompt"] = prompt or ""
+            task["rounds"][round_key]["output"] = response or output_text
+            # 保存分离的 think 和 answer 内容
+            task["rounds"][round_key]["think_content"] = think_content
+            task["rounds"][round_key]["answer_content"] = answer_content
             # 保存校对结果
             if evaluation:
                 task["rounds"][round_key]["evaluation"] = evaluation
@@ -441,6 +449,8 @@ class TestEventEmitter:
                 "total_rounds": total_rounds,
                 "prompt": prompt or "",
                 "response": response or "",
+                "think_content": think_content,
+                "answer_content": answer_content,
                 "total_duration_seconds": total_duration,  # 传递任务总耗时
                 "evaluation": evaluation  # 传递校对结果
             }
