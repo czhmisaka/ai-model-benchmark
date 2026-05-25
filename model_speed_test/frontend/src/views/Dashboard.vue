@@ -692,6 +692,7 @@
           </div>
           <div class="ai-analysis-actions">
             <button class="ai-btn" @click="copyAiReport" :disabled="!aiAnalysisContent" title="复制报告">📋 复制</button>
+            <button class="ai-btn" @click="exportAiReportPdf" :disabled="!aiAnalysisContent" title="导出 PDF">📄 PDF</button>
             <button class="ai-analysis-close" @click="closeAiAnalysis" title="关闭">✕</button>
           </div>
         </div>
@@ -719,6 +720,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { marked } from 'marked'
 
 // ===== 状态 =====
 const config = ref<any>(null)
@@ -1013,46 +1015,8 @@ let aiEventSource: EventSource | null = null
 
 const renderedAiReport = computed(() => {
   if (!aiAnalysisContent.value) return ''
-  return formatMarkdown(aiAnalysisContent.value)
+  return marked.parse(aiAnalysisContent.value) as string
 })
-
-function formatMarkdown(text: string): string {
-  let html = text
-    .replace(/&/g, '&')
-    .replace(/</g, '<')
-    .replace(/>/g, '>')
-  
-  // 代码块 ```...```
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="ai-code-block"><code>$2</code></pre>')
-  
-  // 行内代码 `...`
-  html = html.replace(/`([^`]+)`/g, '<code class="ai-inline-code">$1</code>')
-  
-  // 粗体 **...**
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-  
-  // 斜体 *...*
-  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>')
-  
-  // 标题 ###, ##, #
-  html = html.replace(/^### (.+)$/gm, '<h3 class="ai-h3">$1</h3>')
-  html = html.replace(/^## (.+)$/gm, '<h2 class="ai-h2">$1</h2>')
-  html = html.replace(/^# (.+)$/gm, '<h1 class="ai-h1">$1</h1>')
-  
-  // 水平线 ---
-  html = html.replace(/^---$/gm, '<hr class="ai-hr">')
-  
-  // 无序列表
-  html = html.replace(/^- (.+)$/gm, '<li class="ai-li">$1</li>')
-  
-  // 换行
-  html = html.replace(/\n\n/g, '</p><p class="ai-p">')
-  html = html.replace(/\n/g, '<br>')
-  
-  html = '<p class="ai-p">' + html + '</p>'
-  
-  return html
-}
 
 function toggleAiAnalysis() {
   if (aiAnalysisLoading.value) return
@@ -1127,6 +1091,189 @@ function copyAiReport() {
   }).catch(() => {
     showToast('复制失败，请手动选择复制', 'error')
   })
+}
+
+function exportAiReportPdf() {
+  if (!aiAnalysisContent.value) return
+  
+  // 创建打印内容
+  const printWindow = window.open('', '_blank')
+  if (!printWindow) {
+    showToast('无法打开打印窗口，请检查浏览器设置', 'error')
+    return
+  }
+  
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>AI 分析报告 - ${new Date().toLocaleString('zh-CN')}</title>
+      <style>
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          font-size: 14px;
+          line-height: 1.8;
+          color: #333;
+          padding: 40px;
+          max-width: 900px;
+          margin: 0 auto;
+        }
+        h1 {
+          font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+          font-size: 24px;
+          font-weight: 700;
+          color: #000;
+          border-bottom: 3px solid #FF4500;
+          padding-bottom: 12px;
+          margin: 24px 0 20px 0;
+        }
+        h2 {
+          font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+          font-size: 18px;
+          font-weight: 600;
+          color: #000;
+          border-bottom: 1px solid #e5e5e5;
+          padding-bottom: 8px;
+          margin: 24px 0 16px 0;
+        }
+        h3 {
+          font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+          font-size: 16px;
+          font-weight: 600;
+          color: #000;
+          margin: 20px 0 12px 0;
+        }
+        p {
+          margin: 12px 0;
+          font-size: 14px;
+          color: #333;
+        }
+        strong {
+          font-weight: 600;
+          color: #000;
+        }
+        ul, ol {
+          margin: 12px 0;
+          padding-left: 24px;
+        }
+        li {
+          margin: 6px 0;
+          font-size: 14px;
+        }
+        code {
+          background: #f5f5f5;
+          border: 1px solid #e5e5e5;
+          border-radius: 3px;
+          padding: 2px 6px;
+          font-family: 'JetBrains Mono', Consolas, monospace;
+          font-size: 13px;
+        }
+        pre {
+          background: #f5f5f5;
+          border: 1px solid #e5e5e5;
+          border-radius: 4px;
+          padding: 16px;
+          margin: 16px 0;
+          overflow-x: auto;
+        }
+        pre code {
+          background: transparent;
+          border: none;
+          padding: 0;
+          font-size: 12px;
+          line-height: 1.6;
+          white-space: pre-wrap;
+          word-break: break-word;
+        }
+        hr {
+          border: none;
+          border-top: 1px solid #e5e5e5;
+          margin: 24px 0;
+        }
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          margin: 16px 0;
+          font-size: 13px;
+        }
+        th {
+          background: #f5f5f5;
+          border: 1px solid #e0e0e0;
+          padding: 10px 14px;
+          text-align: left;
+          font-weight: 600;
+          color: #000;
+          font-family: 'JetBrains Mono', Consolas, monospace;
+          font-size: 12px;
+        }
+        td {
+          border: 1px solid #eeeeee;
+          padding: 8px 14px;
+          color: #333;
+        }
+        tr:nth-child(even) {
+          background: #fafafa;
+        }
+        blockquote {
+          border-left: 4px solid #FF4500;
+          margin: 16px 0;
+          padding: 12px 20px;
+          background: rgba(255, 69, 0, 0.03);
+          color: #555;
+        }
+        .footer {
+          margin-top: 40px;
+          padding-top: 20px;
+          border-top: 1px solid #e5e5e5;
+          font-size: 12px;
+          color: #888;
+          text-align: center;
+        }
+        @media print {
+          body {
+            padding: 20px;
+          }
+          h1 {
+            page-break-before: auto;
+          }
+          h2, h3 {
+            page-break-after: avoid;
+          }
+          pre, table {
+            page-break-inside: avoid;
+          }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="report-content">
+        ${aiAnalysisContent.value}
+      </div>
+      <div class="footer">
+        生成时间: ${new Date().toLocaleString('zh-CN')}
+      </div>
+    </body>
+    </html>
+  `
+  
+  printWindow.document.write(htmlContent)
+  printWindow.document.close()
+  
+  // 等待内容加载后自动触发打印
+  printWindow.onload = () => {
+    setTimeout(() => {
+      printWindow.print()
+      // printWindow.close()
+    }, 500)
+  }
+  
+  showToast('正在打开打印窗口...', 'success')
 }
 
 // 卡片展开动画
@@ -6372,29 +6519,31 @@ onUnmounted(() => {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.8;
   color: #333;
+  font-size: 0.88rem;
 }
 
-.ai-report-container :deep(h1.ai-h1) {
+/* 标题 */
+.ai-report-container :deep(h1) {
   font-family: 'Space Grotesk', sans-serif;
   font-size: 1.5rem;
   font-weight: 700;
   color: #000;
-  border-bottom: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent, #FF4500);
   padding-bottom: 8px;
   margin: 24px 0 16px 0;
 }
 
-.ai-report-container :deep(h2.ai-h2) {
+.ai-report-container :deep(h2) {
   font-family: 'Space Grotesk', sans-serif;
   font-size: 1.15rem;
   font-weight: 600;
   color: #000;
-  border-bottom: 1px solid var(--gray-200);
+  border-bottom: 1px solid var(--gray-200, #EEEEEE);
   padding-bottom: 6px;
   margin: 20px 0 12px 0;
 }
 
-.ai-report-container :deep(h3.ai-h3) {
+.ai-report-container :deep(h3) {
   font-family: 'Space Grotesk', sans-serif;
   font-size: 1rem;
   font-weight: 600;
@@ -6402,53 +6551,169 @@ onUnmounted(() => {
   margin: 16px 0 8px 0;
 }
 
-.ai-report-container :deep(.ai-p) {
+.ai-report-container :deep(h4) {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #111;
+  margin: 14px 0 6px 0;
+}
+
+/* 段落 */
+.ai-report-container :deep(p) {
   margin: 8px 0;
   font-size: 0.88rem;
   color: #333;
 }
 
+/* 加粗 / 斜体 */
 .ai-report-container :deep(strong) {
   font-weight: 600;
   color: #000;
 }
 
 .ai-report-container :deep(em) {
-  color: var(--gray-600);
+  color: var(--gray-600, #757575);
 }
 
-.ai-report-container :deep(.ai-li) {
-  margin: 4px 0 4px 20px;
+/* 无序列表 */
+.ai-report-container :deep(ul) {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.ai-report-container :deep(li) {
+  margin: 4px 0;
   font-size: 0.88rem;
   list-style-type: disc;
 }
 
-.ai-report-container :deep(.ai-code-block) {
-  background: #f5f5f5;
-  border: 1px solid var(--gray-200);
-  border-radius: 4px;
-  padding: 12px 16px;
-  margin: 12px 0;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.78rem;
-  line-height: 1.6;
-  overflow-x: auto;
-  white-space: pre-wrap;
+/* 有序列表 */
+.ai-report-container :deep(ol) {
+  margin: 8px 0;
+  padding-left: 24px;
 }
 
-.ai-report-container :deep(.ai-inline-code) {
+.ai-report-container :deep(ol li) {
+  list-style-type: decimal;
+}
+
+/* 行内代码 */
+.ai-report-container :deep(code) {
   background: #f5f5f5;
-  border: 1px solid var(--gray-200);
+  border: 1px solid var(--gray-200, #EEEEEE);
   border-radius: 3px;
   padding: 2px 6px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.8rem;
 }
 
-.ai-report-container :deep(.ai-hr) {
+/* 代码块 */
+.ai-report-container :deep(pre) {
+  background: #f5f5f5;
+  border: 1px solid var(--gray-200, #EEEEEE);
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin: 12px 0;
+  overflow-x: auto;
+}
+
+.ai-report-container :deep(pre code) {
+  background: transparent;
   border: none;
-  border-top: 1px solid var(--gray-200);
+  padding: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+/* 水平线 */
+.ai-report-container :deep(hr) {
+  border: none;
+  border-top: 1px solid var(--gray-200, #EEEEEE);
   margin: 20px 0;
+}
+
+/* 表格 */
+.ai-report-container :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 0.82rem;
+  display: table;
+}
+
+.ai-report-container :deep(thead) {
+  display: table-header-group;
+}
+
+.ai-report-container :deep(tbody) {
+  display: table-row-group;
+}
+
+.ai-report-container :deep(tr) {
+  display: table-row;
+}
+
+.ai-report-container :deep(th) {
+  display: table-cell;
+  background: var(--gray-100, #F5F5F5);
+  border: 1px solid var(--gray-300, #E0E0E0);
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #000;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+}
+
+.ai-report-container :deep(td) {
+  display: table-cell;
+  border: 1px solid var(--gray-200, #EEEEEE);
+  padding: 6px 12px;
+  color: #333;
+}
+
+.ai-report-container :deep(tr:nth-child(even)) {
+  background: var(--gray-50, #FAFAFA);
+}
+
+.ai-report-container :deep(tr:nth-child(even) td) {
+  background: var(--gray-50, #FAFAFA);
+}
+
+/* 引用块 */
+.ai-report-container :deep(blockquote) {
+  border-left: 3px solid var(--accent, #FF4500);
+  margin: 12px 0;
+  padding: 8px 16px;
+  background: rgba(255, 69, 0, 0.03);
+  color: var(--gray-700, #616161);
+}
+
+.ai-report-container :deep(blockquote p) {
+  margin: 4px 0;
+}
+
+/* 链接 */
+.ai-report-container :deep(a) {
+  color: var(--accent, #FF4500);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.15s ease;
+}
+
+.ai-report-container :deep(a:hover) {
+  border-bottom-color: var(--accent, #FF4500);
+}
+
+/* 图片 */
+.ai-report-container :deep(img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin: 8px 0;
 }
 
 .ai-analysis-footer {
