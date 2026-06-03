@@ -82,10 +82,9 @@ class OpenAIProvider(BaseLLMProvider):
             payload["frequency_penalty"] = self.config.frequency_penalty
 
         # 添加 thinking 参数（对于支持思考模式的模型）
+        # MiniMax M3 要求 thinking.type 为 "adaptive"，不支持 "enabled"
         if self.config.thinking_enabled:
-            payload["thinking"] = {"type": "enabled"}
-            # 某些 API 可能需要不同的格式
-            # 例如 MiniMax 可能需要 thoughtfulness 或其他参数
+            payload["thinking"] = {"type": "adaptive"}
 
         # 合并 extra_params
         if self.config.extra_params:

@@ -159,6 +159,7 @@ class ReportGenerator:
             # 汇总数据
             "summary": summary,
             "test_case_name": data.get("test_case_name", summary.get("test_case_name", "N/A")),
+            "folder_name": data.get("folder_name", summary.get("folder_name", "")),
             "success_rate": success_rate,
             
             # 模型统计

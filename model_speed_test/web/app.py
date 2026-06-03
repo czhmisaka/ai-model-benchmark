@@ -10,7 +10,7 @@ import threading
 import inspect
 import ctypes
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 from functools import wraps
 from datetime import datetime
 
@@ -163,6 +163,54 @@ async def reset_test():
     return {"status": "reset"}
 
 
+# ===== 文件夹管理辅助函数 =====
+def _load_folders_tree(cursor):
+    """从数据库加载文件夹树形结构"""
+    cursor.execute("""
+        SELECT folder_id, name, parent_id, sort_order
+        FROM test_case_folders
+        ORDER BY sort_order, name
+    """)
+    folders = []
+    for row in cursor.fetchall():
+        folders.append({
+            "folder_id": row["folder_id"],
+            "name": row["name"],
+            "parent_id": row["parent_id"] or '',
+            "sort_order": row["sort_order"]
+        })
+    return _build_folder_tree(folders)
+
+
+def _build_folder_tree(flat_folders):
+    """将扁平的文件夹列表构建为树形结构"""
+    folder_map = {}
+    roots = []
+    for f in flat_folders:
+        f["children"] = []
+        folder_map[f["folder_id"]] = f
+    for f in flat_folders:
+        parent_id = f.get("parent_id", '')
+        if parent_id and parent_id in folder_map:
+            folder_map[parent_id]["children"].append(f)
+        else:
+            roots.append(f)
+    return roots
+
+
+def _collect_descendant_folder_ids(cursor, folder_id):
+    """递归收集文件夹及其所有子文件夹的 ID"""
+    ids = [folder_id]
+    cursor.execute("""
+        SELECT folder_id FROM test_case_folders WHERE parent_id = ?
+    """, (folder_id,))
+    for row in cursor.fetchall():
+        ids.extend(_collect_descendant_folder_ids(cursor, row["folder_id"]))
+    return ids
+
+
+# ===== 配置管理 API =====
+
 @app.get("/config")
 async def get_config():
     """获取当前配置 - 从数据库读取"""
@@ -202,11 +250,11 @@ async def get_config():
                     "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True
                 })
             
-            # 获取测试用例
+            # 获取测试用例（含 folder_id）
             cursor.execute("""
                 SELECT case_id, name, type, description, max_tokens, 
                        temperature, stream, system_prompt, messages, metadata, enabled,
-                       expected_output, eval_model 
+                       expected_output, eval_model, folder_id
                 FROM test_cases
             """)
             test_cases = []
@@ -242,8 +290,12 @@ async def get_config():
                     "metadata": metadata,
                     "enabled": bool(row["enabled"]),
                     "expected_output": row["expected_output"] or '',
-                    "eval_model": row["eval_model"] or ''
+                    "eval_model": row["eval_model"] or '',
+                    "folder_id": row["folder_id"] or ''
                 })
+            
+            # 获取文件夹树形结构
+            folders = _load_folders_tree(cursor)
             
             conn.close()
             
@@ -268,6 +320,7 @@ async def get_config():
                 "version": "1.0.0",
                 "models": models,
                 "test_cases": test_cases,
+                "folders": folders,
                 "concurrency": concurrency,
                 "output": output,
                 "thresholds": thresholds
@@ -811,11 +864,14 @@ async def add_test_case(test_case_data: dict):
             expected_output = test_case_data.get("expected_output", "")
             eval_model = test_case_data.get("eval_model", "")
             
+            # 处理 folder_id
+            folder_id = test_case_data.get("folder_id", None)
+            
             # 插入新测试用例
             cursor.execute("""
-                INSERT INTO test_cases (case_id, name, type, description, max_tokens, temperature, stream, system_prompt, messages, metadata, enabled, expected_output, eval_model, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (case_id, name, case_type, description, max_tokens, temperature, stream, system_prompt, messages_json, metadata_json, enabled, expected_output, eval_model, datetime.now().isoformat(), datetime.now().isoformat()))
+                INSERT INTO test_cases (case_id, name, type, description, max_tokens, temperature, stream, system_prompt, messages, metadata, enabled, expected_output, eval_model, folder_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (case_id, name, case_type, description, max_tokens, temperature, stream, system_prompt, messages_json, metadata_json, enabled, expected_output, eval_model, folder_id, datetime.now().isoformat(), datetime.now().isoformat()))
             
             conn.commit()
             
@@ -823,7 +879,7 @@ async def add_test_case(test_case_data: dict):
             cursor.execute("""
                 SELECT case_id, name, type, description, max_tokens, 
                        temperature, stream, system_prompt, messages, metadata, enabled,
-                       expected_output, eval_model 
+                       expected_output, eval_model, folder_id
                 FROM test_cases
             """)
             test_cases = []
@@ -859,13 +915,105 @@ async def add_test_case(test_case_data: dict):
                     "metadata": metadata,
                     "enabled": bool(row["enabled"]),
                     "expected_output": row["expected_output"] or '',
-                    "eval_model": row["eval_model"] or ''
+                    "eval_model": row["eval_model"] or '',
+                    "folder_id": row["folder_id"] or ''
                 })
             
             conn.close()
             return {"status": "success", "test_cases": test_cases}
         else:
             raise Exception("config.db not found")
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.put("/config/test-cases/{test_case_id}/move")
+async def move_test_case(test_case_id: str, move_data: dict):
+    """移动测试用例到指定文件夹"""
+    import json
+    from pathlib import Path
+    import sqlite3
+    
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            folder_id = move_data.get("folder_id", None)  # None 表示移动到根目录
+            
+            # 如果指定了 folder_id，验证文件夹存在
+            if folder_id:
+                cursor.execute("SELECT folder_id FROM test_case_folders WHERE folder_id = ?", (folder_id,))
+                if not cursor.fetchone():
+                    conn.close()
+                    return {"error": "目标文件夹不存在"}
+            
+            cursor.execute("""
+                UPDATE test_cases 
+                SET folder_id = ?, updated_at = datetime('now', 'localtime')
+                WHERE case_id = ?
+            """, (folder_id, test_case_id))
+            
+            conn.commit()
+            
+            if cursor.rowcount == 0:
+                conn.close()
+                return {"error": "测试用例不存在"}
+            
+            # 返回更新后的测试用例列表
+            cursor.execute("""
+                SELECT case_id, name, type, description, max_tokens, 
+                       temperature, stream, system_prompt, messages, metadata, enabled,
+                       expected_output, eval_model, folder_id
+                FROM test_cases
+            """)
+            test_cases = []
+            for row in cursor.fetchall():
+                messages = row["messages"]
+                if messages:
+                    try:
+                        messages = json.loads(messages)
+                    except:
+                        messages = []
+                else:
+                    messages = []
+                
+                metadata = row["metadata"]
+                if metadata:
+                    try:
+                        metadata = json.loads(metadata)
+                    except:
+                        metadata = {}
+                else:
+                    metadata = {}
+                
+                test_cases.append({
+                    "id": row["case_id"],
+                    "name": row["name"],
+                    "type": row["type"],
+                    "description": row["description"],
+                    "max_tokens": row["max_tokens"] or 2000,
+                    "temperature": row["temperature"] or 0.7,
+                    "stream": bool(row["stream"]) if row["stream"] is not None else True,
+                    "system_prompt": row["system_prompt"],
+                    "messages": messages,
+                    "metadata": metadata,
+                    "enabled": bool(row["enabled"]),
+                    "expected_output": row["expected_output"] or '',
+                    "eval_model": row["eval_model"] or '',
+                    "folder_id": row["folder_id"] or ''
+                })
+            
+            # 获取文件夹树
+            folders = _load_folders_tree(cursor)
+            conn.close()
+            
+            return {"status": "success", "test_cases": test_cases, "folders": folders}
+        else:
+            return {"error": "config.db not found"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -925,6 +1073,9 @@ async def update_test_case(test_case_id: str, test_case_data: dict):
             if "eval_model" in test_case_data:
                 updates.append("eval_model = ?")
                 params.append(test_case_data["eval_model"])
+            if "folder_id" in test_case_data:
+                updates.append("folder_id = ?")
+                params.append(test_case_data["folder_id"])
             
             updates.append("updated_at = ?")
             params.append(datetime.now().isoformat())
@@ -948,7 +1099,7 @@ async def update_test_case(test_case_id: str, test_case_data: dict):
             cursor.execute("""
                 SELECT case_id, name, type, description, max_tokens, 
                        temperature, stream, system_prompt, messages, metadata, enabled,
-                       expected_output, eval_model 
+                       expected_output, eval_model, folder_id
                 FROM test_cases
             """)
             test_cases = []
@@ -984,7 +1135,8 @@ async def update_test_case(test_case_id: str, test_case_data: dict):
                     "metadata": metadata,
                     "enabled": bool(row["enabled"]),
                     "expected_output": row["expected_output"] or '',
-                    "eval_model": row["eval_model"] or ''
+                    "eval_model": row["eval_model"] or '',
+                    "folder_id": row["folder_id"] or ''
                 })
             
             conn.close()
@@ -1040,6 +1192,207 @@ async def update_system_config(request: Request):
         return {"error": str(e)}
 
 
+# ===== 测试用例文件夹管理 API =====
+
+@app.get("/config/test-case-folders")
+async def get_test_case_folders():
+    """获取所有文件夹（树形结构）"""
+    import json
+    from pathlib import Path
+    import sqlite3
+    
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            folders = _load_folders_tree(cursor)
+            conn.close()
+            
+            return {"status": "success", "folders": folders}
+        else:
+            return {"error": "config.db not found"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/config/test-case-folders")
+async def create_test_case_folder(folder_data: dict):
+    """创建新文件夹"""
+    import json
+    from pathlib import Path
+    import sqlite3
+    import uuid
+    
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            folder_id = folder_data.get("folder_id", str(uuid.uuid4()))
+            name = folder_data.get("name", "新文件夹")
+            parent_id = folder_data.get("parent_id", None)
+            sort_order = folder_data.get("sort_order", 0)
+            
+            # 如果指定了 parent_id，验证父文件夹存在
+            if parent_id:
+                cursor.execute("SELECT folder_id FROM test_case_folders WHERE folder_id = ?", (parent_id,))
+                if not cursor.fetchone():
+                    conn.close()
+                    return {"error": "父文件夹不存在"}
+            
+            cursor.execute("""
+                INSERT INTO test_case_folders (folder_id, name, parent_id, sort_order)
+                VALUES (?, ?, ?, ?)
+            """, (folder_id, name, parent_id, sort_order))
+            
+            conn.commit()
+            
+            # 返回更新后的文件夹树
+            folders = _load_folders_tree(cursor)
+            conn.close()
+            
+            return {"status": "success", "folders": folders}
+        else:
+            return {"error": "config.db not found"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.put("/config/test-case-folders/{folder_id}")
+async def update_test_case_folder(folder_id: str, folder_data: dict):
+    """更新文件夹（重命名、移动）"""
+    import json
+    from pathlib import Path
+    import sqlite3
+    
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # 检查文件夹是否存在
+            cursor.execute("SELECT folder_id, parent_id FROM test_case_folders WHERE folder_id = ?", (folder_id,))
+            existing = cursor.fetchone()
+            if not existing:
+                conn.close()
+                return {"error": "文件夹不存在"}
+            
+            updates = []
+            params = []
+            
+            if "name" in folder_data:
+                updates.append("name = ?")
+                params.append(folder_data["name"])
+            
+            if "parent_id" in folder_data:
+                new_parent_id = folder_data["parent_id"]
+                # 循环检测：向上递归查找
+                if new_parent_id:
+                    # 不允许设置为自身
+                    if new_parent_id == folder_id:
+                        conn.close()
+                        return {"error": "不能将文件夹移动到自身"}
+                    # 循环检测
+                    check_id = new_parent_id
+                    visited = set()
+                    while check_id:
+                        if check_id == folder_id or check_id in visited:
+                            conn.close()
+                            return {"error": "循环引用：不能将文件夹移动到其子文件夹中"}
+                        visited.add(check_id)
+                        cursor.execute("SELECT parent_id FROM test_case_folders WHERE folder_id = ?", (check_id,))
+                        row = cursor.fetchone()
+                        check_id = row["parent_id"] if row and row["parent_id"] else None
+                
+                updates.append("parent_id = ?")
+                params.append(new_parent_id)
+            
+            if "sort_order" in folder_data:
+                updates.append("sort_order = ?")
+                params.append(folder_data["sort_order"])
+            
+            if updates:
+                updates.append("updated_at = datetime('now', 'localtime')")
+                params.append(folder_id)
+                
+                cursor.execute(f"""
+                    UPDATE test_case_folders 
+                    SET {', '.join(updates)}
+                    WHERE folder_id = ?
+                """, params)
+                
+                conn.commit()
+            
+            # 返回更新后的文件夹树
+            folders = _load_folders_tree(cursor)
+            conn.close()
+            
+            return {"status": "success", "folders": folders}
+        else:
+            return {"error": "config.db not found"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.delete("/config/test-case-folders/{folder_id}")
+async def delete_test_case_folder(folder_id: str):
+    """删除文件夹（级联删除子文件夹，用例回退 NULL）"""
+    import json
+    from pathlib import Path
+    import sqlite3
+    
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    
+    try:
+        if config_db_path.exists():
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # 检查文件夹是否存在
+            cursor.execute("SELECT folder_id FROM test_case_folders WHERE folder_id = ?", (folder_id,))
+            if not cursor.fetchone():
+                conn.close()
+                return {"error": "文件夹不存在"}
+            
+            # 递归收集所有子文件夹 ID
+            all_ids = _collect_descendant_folder_ids(cursor, folder_id)
+            
+            # 将所有受影响文件夹下的 test_cases 的 folder_id 置为 NULL
+            placeholders = ','.join(['?' for _ in all_ids])
+            cursor.execute(f"""
+                UPDATE test_cases 
+                SET folder_id = NULL, updated_at = datetime('now', 'localtime')
+                WHERE folder_id IN ({placeholders})
+            """, all_ids)
+            
+            # 删除所有子文件夹记录（父文件夹由 CASCADE 处理）
+            for fid in all_ids:
+                cursor.execute("DELETE FROM test_case_folders WHERE folder_id = ?", (fid,))
+            
+            conn.commit()
+            
+            # 返回更新后的文件夹树
+            folders = _load_folders_tree(cursor)
+            conn.close()
+            
+            return {"status": "success", "folders": folders}
+        else:
+            return {"error": "config.db not found"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.delete("/config/test-cases/{test_case_id}")
 async def delete_test_case(test_case_id: str):
     """删除测试用例 - 操作数据库"""
@@ -1066,7 +1419,8 @@ async def delete_test_case(test_case_id: str):
             # 返回更新后的所有测试用例列表
             cursor.execute("""
                 SELECT case_id, name, type, description, max_tokens, 
-                       temperature, stream, system_prompt, messages, metadata, enabled 
+                       temperature, stream, system_prompt, messages, metadata, enabled,
+                       expected_output, eval_model, folder_id
                 FROM test_cases
             """)
             test_cases = []
@@ -1100,7 +1454,10 @@ async def delete_test_case(test_case_id: str):
                     "system_prompt": row["system_prompt"],
                     "messages": messages,
                     "metadata": metadata,
-                    "enabled": bool(row["enabled"])
+                    "enabled": bool(row["enabled"]),
+                    "expected_output": row["expected_output"] or '',
+                    "eval_model": row["eval_model"] or '',
+                    "folder_id": row["folder_id"] or ''
                 })
             
             conn.close()
@@ -1548,11 +1905,11 @@ async def start_test(request: Request):
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 
-                # 读取启用的测试用例
+                # 读取启用的测试用例（包含 folder_id）
                 cursor.execute("""
                     SELECT case_id, name, type, description, max_tokens, 
                            temperature, stream, system_prompt, messages, metadata, enabled,
-                           expected_output, eval_model 
+                           expected_output, eval_model, folder_id 
                     FROM test_cases WHERE enabled = 1
                 """)
                 
@@ -1588,7 +1945,8 @@ async def start_test(request: Request):
                         "metadata": metadata,
                         "enabled": bool(row["enabled"]),
                         "expected_output": row["expected_output"] or '',
-                        "eval_model": row["eval_model"] or ''
+                        "eval_model": row["eval_model"] or '',
+                        "folder_id": row["folder_id"] or ''
                     }
                     
                     # 如果指定了 case_ids，则过滤
@@ -1690,6 +2048,33 @@ async def start_test(request: Request):
         
         # 获取测试用例
         test_cases = [tc for tc in config.get("test_cases", []) if tc.get("enabled", True)]
+        
+        # 构建 case_name → folder 映射，传递给 emitter 用于持久化
+        case_folder_map: Dict[str, Dict[str, str]] = {}
+        folder_name_cache: Dict[str, str] = {}  # folder_id → folder_name
+        if config_db_path.exists():
+            try:
+                conn = sqlite3.connect(str(config_db_path))
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                # 一次性读取所有文件夹
+                cursor.execute("SELECT folder_id, name FROM test_case_folders")
+                for row in cursor.fetchall():
+                    folder_name_cache[row["folder_id"]] = row["name"]
+                conn.close()
+            except Exception as e:
+                pass
+        
+        for tc in test_cases:
+            tc_name = tc.get("name", "")
+            tc_folder_id = tc.get("folder_id", "")
+            if tc_name and tc_folder_id and tc_folder_id in folder_name_cache:
+                case_folder_map[tc_name] = {
+                    "folder_id": tc_folder_id,
+                    "folder_name": folder_name_cache[tc_folder_id]
+                }
+        
+        test_emitter.set_case_folder_map(case_folder_map)
         
         # 创建客户端
         clients = create_clients(config, model_names if model_names else None)

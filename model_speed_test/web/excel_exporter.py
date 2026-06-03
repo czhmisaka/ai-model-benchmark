@@ -200,10 +200,10 @@ class ExcelExporter:
         # 标题
         ws['A1'] = f'测试详细记录 (共 {len(results)} 条)'
         ws['A1'].font = Font(size=14, bold=True)
-        ws.merge_cells('A1:J1')
+        ws.merge_cells('A1:K1')
         
         # 表头
-        headers = ['序号', '时间戳', '模型', '测试用例', '轮次', 'TTFT(s)', 'TPS', 'Tokens', 'Think Tokens', '状态']
+        headers = ['序号', '时间戳', '模型', '测试用例', '所属文件夹', '轮次', 'TTFT(s)', 'TPS', 'Tokens', 'Think Tokens', '状态']
         
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=3, column=col, value=header)
@@ -218,27 +218,28 @@ class ExcelExporter:
             ws.cell(row=row_idx, column=2, value=r.get('timestamp', ''))  # 时间戳
             ws.cell(row=row_idx, column=3, value=r.get('model_name', ''))  # 模型
             ws.cell(row=row_idx, column=4, value=r.get('test_case_name', ''))  # 测试用例
-            ws.cell(row=row_idx, column=5, value=r.get('round_number', 0))  # 轮次
+            ws.cell(row=row_idx, column=5, value=r.get('folder_name', ''))  # 所属文件夹
+            ws.cell(row=row_idx, column=6, value=r.get('round_number', 0))  # 轮次
             
             # TTFT
             ttft = r.get('ttft_seconds', 0)
-            ws.cell(row=row_idx, column=6, value=round(ttft, 4))
+            ws.cell(row=row_idx, column=7, value=round(ttft, 4))
             
             # TPS
             tps = r.get('tokens_per_second', 0)
-            ws.cell(row=row_idx, column=7, value=round(tps, 2))
+            ws.cell(row=row_idx, column=8, value=round(tps, 2))
             
             # Tokens
             tokens = r.get('output_tokens', 0)
-            ws.cell(row=row_idx, column=8, value=tokens)
+            ws.cell(row=row_idx, column=9, value=tokens)
             
             # Think Tokens（如果有）
             think_tokens = r.get('think_tokens', 0)
-            ws.cell(row=row_idx, column=9, value=think_tokens)
+            ws.cell(row=row_idx, column=10, value=think_tokens)
             
             # 状态
             success = r.get('success', 0)
-            status_cell = ws.cell(row=row_idx, column=10, value='成功' if success else '失败')
+            status_cell = ws.cell(row=row_idx, column=11, value='成功' if success else '失败')
             
             # 状态颜色
             if success:
@@ -247,11 +248,11 @@ class ExcelExporter:
                 status_cell.fill = self.ERROR_FILL
             
             # 添加边框
-            for col in range(1, 11):
+            for col in range(1, 12):
                 ws.cell(row=row_idx, column=col).border = self.BORDER
         
         # 设置列宽
-        col_widths = [8, 22, 20, 18, 8, 12, 10, 10, 12, 10]
+        col_widths = [8, 22, 20, 18, 15, 8, 12, 10, 10, 12, 10]
         for col, width in enumerate(col_widths, 1):
             ws.column_dimensions[get_column_letter(col)].width = width
     

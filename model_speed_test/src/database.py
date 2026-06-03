@@ -99,6 +99,18 @@ class TestDatabase:
         except sqlite3.OperationalError:
             pass  # 列已存在
         
+        # 如果 folder_id 列不存在，则添加（数据库迁移 - 文件夹支持）
+        try:
+            cursor.execute("ALTER TABLE test_results ADD COLUMN folder_id TEXT")
+        except sqlite3.OperationalError:
+            pass
+        
+        # 如果 folder_name 列不存在，则添加（数据库迁移 - 文件夹支持）
+        try:
+            cursor.execute("ALTER TABLE test_results ADD COLUMN folder_name TEXT")
+        except sqlite3.OperationalError:
+            pass
+        
         # 创建索引
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_results_group_id ON test_results(group_id)
@@ -119,7 +131,8 @@ class TestDatabase:
         name: str = None,
         models: List[str] = None,
         test_cases: List[str] = None,
-        total_rounds: int = 10
+        total_rounds: int = 10,
+        config_extra: Dict[str, Any] = None
     ) -> int:
         """
         创建新的测试组
@@ -130,6 +143,7 @@ class TestDatabase:
             models: 模型列表
             test_cases: 测试用例列表
             total_rounds: 总轮次数
+            config_extra: 额外的配置数据（如 case_folder_map），会合并到 config_json
             
         Returns:
             记录ID
@@ -142,6 +156,10 @@ class TestDatabase:
             "test_cases": test_cases or [],
             "total_rounds": total_rounds
         }
+        
+        # 合并额外配置（如 case_folder_map）
+        if config_extra:
+            config.update(config_extra)
         
         cursor.execute("""
             INSERT INTO test_groups (group_id, name, start_time, config_json, total_rounds)
@@ -278,7 +296,9 @@ class TestDatabase:
         prompt: str = None,
         response: str = None,
         output_text: str = None,
-        evaluation: Dict[str, Any] = None
+        evaluation: Dict[str, Any] = None,
+        folder_id: str = None,
+        folder_name: str = None
     ) -> int:
         """
         添加测试结果
@@ -295,6 +315,8 @@ class TestDatabase:
             response: 模型响应（可选，截断保存）
             output_text: 完整输出文本（可选，完整保存）
             evaluation: 校对结果（可选），包含 is_correct, rate, reason
+            folder_id: 所属文件夹ID（可选）
+            folder_name: 所属文件夹名称（可选）
             
         Returns:
             记录ID
@@ -318,8 +340,8 @@ class TestDatabase:
                 ttft_seconds, tpft_seconds, total_time_seconds,
                 input_tokens, output_tokens, tokens_per_second, total_tokens_per_second,
                 success, error_message, prompt_preview, response_preview, output_text, timestamp,
-                evaluation_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                evaluation_json, folder_id, folder_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             group_id,
             model_name,
@@ -338,7 +360,9 @@ class TestDatabase:
             response_preview,
             full_output,
             datetime.now().isoformat(),
-            evaluation_json
+            evaluation_json,
+            folder_id,
+            folder_name
         ))
         
         conn.commit()
@@ -417,11 +441,13 @@ class TestDatabase:
             conn.close()
             return None
         
-        # 按模型分组统计
+        # 按模型、测试用例、文件夹分组统计（修复同名用例合并问题）
         cursor.execute("""
             SELECT 
                 model_name,
                 test_case_name,
+                folder_id,
+                folder_name,
                 COUNT(*) as total,
                 SUM(success) as success_count,
                 AVG(ttft_seconds) as avg_ttft,
@@ -431,7 +457,7 @@ class TestDatabase:
                 SUM(output_tokens) as total_output_tokens
             FROM test_results
             WHERE group_id = ?
-            GROUP BY model_name, test_case_name
+            GROUP BY model_name, test_case_name, folder_id
         """, (group_id,))
         
         model_stats = [dict(row) for row in cursor.fetchall()]

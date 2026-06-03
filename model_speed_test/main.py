@@ -1228,6 +1228,45 @@ async def run_tests_with_web(
             "models": [c.name for c in clients],
             "test_cases": test_cases
         })
+        
+        # 构建测试用例→文件夹映射表
+        case_folder_map: Dict[str, Dict[str, str]] = {}
+        for tc in test_cases:
+            tc_name = tc.get("name", "")
+            if tc_name and tc.get("folder_id"):
+                case_folder_map[tc_name] = {
+                    "folder_id": tc.get("folder_id", ""),
+                    "folder_name": tc.get("folder_name", "")
+                }
+        # 如果 test_cases 中没有 folder_name，尝试从数据库补全
+        if case_folder_map:
+            try:
+                import sqlite3
+                db_path = Path(config.get("output", {}).get("results_dir", "results")) / "config.db"
+                if not db_path.exists():
+                    db_path = Path(__file__).parent / "results" / "config.db"
+                if db_path.exists():
+                    conn = sqlite3.connect(str(db_path))
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    # 补全 folder_name
+                    folder_ids = set(v["folder_id"] for v in case_folder_map.values() if v["folder_id"])
+                    if folder_ids:
+                        placeholders = ','.join(['?' for _ in folder_ids])
+                        cursor.execute(
+                            f"SELECT folder_id, name as folder_name FROM test_case_folders WHERE folder_id IN ({placeholders})",
+                            tuple(folder_ids)
+                        )
+                        rows = cursor.fetchall()
+                        folder_name_map = {r["folder_id"]: r["folder_name"] for r in rows}
+                        for tc_name, info in case_folder_map.items():
+                            if info["folder_id"] in folder_name_map and not info.get("folder_name"):
+                                info["folder_name"] = folder_name_map[info["folder_id"]]
+                    conn.close()
+            except Exception as e:
+                print(f"补全 folder_name 映射失败: {e}")
+        test_emitter.set_case_folder_map(case_folder_map)
+        
         start_config = {
             "models": [c.name for c in clients],
             "test_cases": [tc.get("name") for tc in test_cases],

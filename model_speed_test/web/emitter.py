@@ -54,6 +54,15 @@ class TestEventEmitter:
         # 启动时尝试恢复状态
         self._load_state()
     
+    def set_case_folder_map(self, case_folder_map: Dict[str, Dict[str, str]]):
+        """
+        设置测试用例→文件夹的映射表
+        
+        Args:
+            case_folder_map: { case_name: { "folder_id": "...", "folder_name": "..." } }
+        """
+        self._case_folder_map = case_folder_map or {}
+    
     def _get_task_id(self, model_name: str, test_case_name: str) -> str:
         """生成任务ID"""
         return f"{model_name}__{test_case_name}"
@@ -251,6 +260,9 @@ class TestEventEmitter:
                 task = self._get_or_create_task(model_name, test_case_name, total_rounds)
                 task["start_time"] = test_start_time  # 添加任务开始时间
         
+        # 构建 case_folder_map（test_case_name → { folder_id, folder_name }）
+        case_folder_map: Dict[str, Dict[str, str]] = getattr(self, '_case_folder_map', {}) or {}
+        
         # 保存到数据库
         if self._use_db and self._db:
             try:
@@ -259,7 +271,8 @@ class TestEventEmitter:
                     name=f"测试 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                     models=models,
                     test_cases=test_cases,
-                    total_rounds=total_rounds
+                    total_rounds=total_rounds,
+                    config_extra={"case_folder_map": case_folder_map}
                 )
                 print(f"[Emitter] 已创建测试组: {group_id}")
             except Exception as e:
@@ -417,6 +430,11 @@ class TestEventEmitter:
                 # 将 metrics 对象转换为字典
                 metrics_dict = metrics.to_dict() if hasattr(metrics, 'to_dict') else metrics
                 
+                # 查找该测试用例所属的文件夹信息
+                case_folder = getattr(self, '_case_folder_map', {}).get(test_case_name, {})
+                folder_id = case_folder.get('folder_id')
+                folder_name = case_folder.get('folder_name')
+                
                 # 不进行任何截断，使用完整输出
                 self._db.add_result(
                     group_id=group_id,
@@ -428,7 +446,9 @@ class TestEventEmitter:
                     prompt=prompt,
                     response=output_text,
                     output_text=output_text,
-                    evaluation=evaluation  # 传递校对结果
+                    evaluation=evaluation,  # 传递校对结果
+                    folder_id=folder_id,
+                    folder_name=folder_name
                 )
                 print(f"[Emitter] 已保存测试结果: {group_id} - {model_name} - R{current_round}")
                 
