@@ -149,6 +149,17 @@
           <input type="text" class="form-input" v-model="caseForm.name" placeholder="Test Case" />
         </div>
         
+        <!-- Folder 选择器 -->
+        <div class="form-group">
+          <label class="form-label">所属文件夹</label>
+          <select class="form-input" v-model="caseForm.folder_id">
+            <option value="">未分类（根目录）</option>
+            <option v-for="opt in folderOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+        </div>
+        
         <!-- Messages 编辑器 -->
         <div class="form-group">
           <label class="form-label">Messages</label>
@@ -237,6 +248,7 @@ interface CaseForm {
   max_tokens: number
   expected_output?: string
   eval_model?: string
+  folder_id?: string
 }
 
 interface ModelOption {
@@ -246,6 +258,18 @@ interface ModelOption {
   model: string
 }
 
+interface TreeNode {
+  folder_id: string
+  name: string
+  parent_id: string | null
+  children: TreeNode[]
+}
+
+interface FolderOption {
+  label: string
+  value: string
+}
+
 interface Props {
   visible: boolean
   type: 'model' | 'case'
@@ -253,11 +277,28 @@ interface Props {
   modelForm: ModelForm
   caseForm: CaseForm
   availableModels?: ModelOption[]
+  folders?: TreeNode[]
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  availableModels: () => []
+  availableModels: () => [],
+  folders: () => []
 })
+
+// 扁平化文件夹为下拉选项（排除根目录下的"未分类"）
+function flattenFolders(nodes: TreeNode[], prefix = ''): FolderOption[] {
+  const result: FolderOption[] = []
+  for (const node of nodes) {
+    const label = prefix ? `${prefix} / ${node.name}` : `📁 ${node.name}`
+    result.push({ label, value: node.folder_id })
+    if (node.children && node.children.length > 0) {
+      result.push(...flattenFolders(node.children, label))
+    }
+  }
+  return result
+}
+
+const folderOptions = computed(() => flattenFolders(props.folders || []))
 
 // Provider 默认端点
 const providerEndpoints: Record<string, string> = {

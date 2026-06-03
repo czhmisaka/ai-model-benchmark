@@ -2,6 +2,26 @@
   <div class="modal-overlay" :class="{ show: visible }">
     <div class="modal">
       <div class="modal-title">测试启动配置</div>
+      
+      <!-- 已选测试用例预览 -->
+      <div class="selected-preview" v-if="selectedCount > 0">
+        <div class="preview-header">已选测试用例 ({{ selectedCount }})</div>
+        <div class="preview-tree">
+          <template v-for="folder in groupedCases" :key="folder.key">
+            <div class="tree-folder" :class="{ collapsed: collapsedFolders[folder.key] }" @click="toggleFolderGroup(folder.key)">
+              <span class="folder-toggle">{{ collapsedFolders[folder.key] ? '▶' : '▼' }}</span>
+              <span class="folder-name">📁 {{ folder.name }} ({{ folder.cases.length }})</span>
+            </div>
+            <div class="tree-case-list" v-if="!collapsedFolders[folder.key]">
+              <div class="tree-case" v-for="c in folder.cases" :key="c.id">
+                <span class="case-bullet">☑</span>
+                <span class="case-name">{{ c.name }}</span>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+      
       <div class="form-group">
         <label class="form-label">测试轮数 (Test Rounds)</label>
         <input type="number" class="form-input" v-model="config.test_rounds" min="1" max="100" />
@@ -31,6 +51,8 @@
 </template>
 
 <script setup lang="ts">
+import { computed, reactive } from 'vue'
+
 interface StartConfig {
   test_rounds: number
   max_concurrent: number
@@ -38,17 +60,89 @@ interface StartConfig {
   test_name: string
 }
 
+interface TestCase {
+  id: string
+  name: string
+  folder_id?: string | null
+}
+
+interface TreeNode {
+  folder_id: string
+  name: string
+  children?: TreeNode[]
+}
+
 interface Props {
   visible: boolean
   config: StartConfig
+  testCases?: TestCase[]
+  folders?: TreeNode[]
+  selectedCases?: Set<string>
 }
 
-defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  testCases: () => [],
+  folders: () => [],
+  selectedCases: () => new Set()
+})
 
 defineEmits<{
   cancel: []
   confirm: []
 }>()
+
+// 已选用例总数
+const selectedCount = computed(() => props.selectedCases?.size ?? 0)
+
+// 按文件夹分组已选用例
+const groupedCases = computed(() => {
+  const selectedIds = props.selectedCases ?? new Set()
+  const testCases = props.testCases ?? []
+  const folders = props.folders ?? []
+  
+  // 构建 folder_id → folder_name 映射
+  const folderNameMap: Record<string, string> = {}
+  const walk = (nodes: TreeNode[]) => {
+    for (const node of nodes) {
+      folderNameMap[node.folder_id] = node.name
+      if (node.children) walk(node.children)
+    }
+  }
+  walk(folders)
+  
+  // 分组
+  const groupMap: Record<string, { name: string; cases: TestCase[] }> = {}
+  
+  for (const tc of testCases) {
+    if (!selectedIds.has(tc.id)) continue
+    const fid = tc.folder_id || '__uncategorized__'
+    if (!groupMap[fid]) {
+      groupMap[fid] = {
+        name: fid === '__uncategorized__' ? '未分类' : (folderNameMap[fid] || '未知文件夹'),
+        cases: []
+      }
+    }
+    groupMap[fid].cases.push(tc)
+  }
+  
+  // 排序：未分类放最后，其余按名称排序
+  const sorted = Object.entries(groupMap)
+    .sort(([a], [b]) => {
+      if (a === '__uncategorized__') return 1
+      if (b === '__uncategorized__') return -1
+      return groupMap[a].name.localeCompare(groupMap[b].name, 'zh-CN')
+    })
+    .map(([key, val]) => ({ key, ...val }))
+  
+  return sorted
+})
+
+// 折叠状态
+const collapsedFolders = reactive<Record<string, boolean>>({})
+
+function toggleFolderGroup(key: string) {
+  collapsedFolders[key] = !collapsedFolders[key]
+}
 </script>
 
 <style lang="scss" scoped>
@@ -140,6 +234,87 @@ defineEmits<{
     background: var(--white);
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
   }
+}
+
+.selected-preview {
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  background: var(--gray-50);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.preview-header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--gray-700);
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.preview-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tree-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s;
+  
+  &:hover {
+    background: var(--gray-100);
+  }
+  
+  &.collapsed {
+    opacity: 0.7;
+  }
+}
+
+.folder-toggle {
+  font-size: 0.6rem;
+  color: var(--gray-500);
+  width: 12px;
+  text-align: center;
+}
+
+.folder-name {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--gray-700);
+}
+
+.tree-case-list {
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tree-case {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+}
+
+.case-bullet {
+  font-size: 0.65rem;
+  color: var(--gray-400);
+}
+
+.case-name {
+  font-size: 0.7rem;
+  color: var(--gray-600);
+  font-family: 'JetBrains Mono', monospace;
 }
 
 .form-actions {

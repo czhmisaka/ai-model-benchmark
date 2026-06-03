@@ -31,4 +31,27 @@
   --warning: #f59e0b;
   --error: #ef4444;
   --info: #3b82f6;
+  
+  // 树形组件变量
+  --tree-indent: 20px;
+  --tree-branch-line: #e0e0e0;
+  --tree-hover-bg: rgba(37, 99, 235, 0.03);
+  --tree-selected-bg: rgba(37, 99, 235, 0.06);
+  --tree-folder-color: #f59e0b;
+  --tree-case-color: #2563eb;
+  --tree-indeterminate-color: #8b5cf6;
+  --tree-drag-over-bg: rgba(37, 99, 235, 0.08);
+  --tree-drag-line: #2563eb;
+
+  // 通用线条系统变量（兼容 TreeView 组件）
+  --line-primary: #000000;
+  --line-secondary: #666666;
+  --line-tertiary: #cccccc;
+  --line-light: #e0e0e0;
+  --line-accent: #2563eb;
+  --bg-white: #ffffff;
+
+  // 动效变量
+  --duration-fast: 150ms;
+  --ease-default: cubic-bezier(0.25, 0.8, 0.25, 1);
 }

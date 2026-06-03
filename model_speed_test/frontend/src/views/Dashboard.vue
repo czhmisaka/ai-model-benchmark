@@ -27,7 +27,7 @@
         <button class="btn btn-secondary" id="clearBtn" @click="clearTest">✕ CLEAR</button>
         <button class="btn btn-secondary" id="historyBtn" @click="showHistoryModal">☰ HISTORY</button>
         <button class="btn btn-accent" id="aiAnalysisBtn" @click="toggleAiAnalysis" :disabled="aiAnalysisLoading">
-          {{ aiAnalysisLoading ? '⏳ 分析中...' : '🤖 AI 分析' }}
+          {{ aiAnalysisLoading ? '⟳ 分析中...' : '◇ AI 分析' }}
         </button>
       </div>
     </header>
@@ -73,35 +73,42 @@
         </div>
       </div>
       
-      <!-- Test Cases 列 -->
+      <!-- Test Cases 列（TreeView） -->
       <div class="list-section">
         <div class="list-header">
           <span>Test Cases</span>
           <div class="header-actions">
-            <button class="select-all-btn" @click="selectAllCases" title="Select/Deselect All">
-              {{ selectedCases.size === config?.test_cases?.length ? '⊙' : '○' }}
-            </button>
-            <button class="add-btn" @click="showModal('case')" title="Add Test Case">+</button>
+            <input
+              v-model="caseSearchQuery"
+              class="tree-search-input"
+              type="text"
+              placeholder="搜索…"
+              title="搜索测试用例"
+            />
+            <button class="manager-btn" @click="openManager" title="管理测试集">⚙</button>
           </div>
         </div>
-        <div class="item-list" id="caseList">
-          <div 
-            v-for="caseItem in config?.test_cases || []" 
-            :key="caseItem.id"
-            class="item"
-            :class="{ selected: selectedCases.has(caseItem.id) }"
-            @click="toggleCase(caseItem.id)"
-            @mouseenter="showCasePopover($event, caseItem)"
-            @mouseleave="hideCasePopover"
-          >
-            <div class="item-checkbox">{{ selectedCases.has(caseItem.id) ? '✓' : '' }}</div>
-            <div class="item-name" :title="caseItem.name">{{ caseItem.name }}</div>
-            <button class="item-edit" @click.stop="editCase(caseItem)" title="Edit">✎</button>
-            <button class="item-delete" @click.stop="deleteCase(caseItem.id)" title="Delete">×</button>
-          </div>
-          <div v-if="!config?.test_cases?.length" class="item">
-            <span class="item-name" style="color:var(--gray-500)">No cases</span>
-          </div>
+        <div class="item-list tree-view-wrapper" id="caseList">
+          <TreeView
+            v-if="config"
+            :folders="config.folders || []"
+            :test-cases="config.test_cases || []"
+            :selected-ids="selectedCases"
+            :search-query="caseSearchQuery"
+            @toggle-folder="toggleFolder"
+            @toggle-case="toggleCase"
+            @select-all="selectAllCases"
+            @deselect-all="deselectAllCases"
+            @add-folder="showManagerModal"
+            @add-case="showModal('case')"
+            @rename-folder="handleRenameFolder"
+            @move-case="handleMoveCase"
+            @delete-folder="handleDeleteFolder"
+            @delete-case="deleteCase"
+            @edit-case="editCaseById"
+            @expand-all="handleExpandAll"
+            @collapse-all="handleCollapseAll"
+          />
         </div>
       </div>
     </div>
@@ -110,7 +117,7 @@
     <div class="panel-main">
       <div class="task-cards" id="taskCards">
         <div v-if="taskCount === 0" class="empty-tasks">
-          <div class="empty-icon">🧪</div>
+          <div class="empty-icon">◇</div>
           <div class="empty-text">No Running Tasks</div>
           <div class="empty-hint">Select models and test cases, then click START</div>
         </div>
@@ -274,7 +281,7 @@
               @click="testModel" 
               :disabled="!canTestModel || isTesting"
             >
-              {{ isTesting ? '测试中...' : '🧪 测试连接' }}
+              {{ isTesting ? '测试中...' : '◇ 测试连接' }}
             </button>
             <div v-if="testResult" class="test-result" :class="testResult.success ? 'success' : 'error'">
               <span v-if="testResult.success">✓ 连接成功 ({{ testResult.latency_ms }}ms)</span>
@@ -288,6 +295,17 @@
           <div class="form-group">
             <label class="form-label">Name</label>
             <input type="text" class="form-input" v-model="caseForm.name" placeholder="Test Case" />
+          </div>
+          
+          <!-- Folder 选择器 -->
+          <div class="form-group">
+            <label class="form-label">所属文件夹</label>
+            <select class="form-input" v-model="caseForm.folder_id">
+              <option value="">未分类（根目录）</option>
+              <option v-for="opt in flatFolderOptions" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </option>
+            </select>
           </div>
           
           <!-- Messages 编辑器 -->
@@ -356,35 +374,15 @@
     </div>
 
     <!-- 测试启动配置 Modal -->
-    <div class="modal-overlay" :class="{ show: startConfigVisible }" @click.self="hideStartConfig">
-      <div class="modal">
-        <div class="modal-title">测试启动配置</div>
-        <div class="form-group">
-          <label class="form-label">测试轮数 (Test Rounds)</label>
-          <input type="number" class="form-input" v-model="startConfig.test_rounds" min="1" max="100" />
-          <div style="font-size: 0.65rem; color: var(--gray-500); margin-top: 4px;">每个模型-测试用例组合重复测试的轮数</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">最大并发数 (Max Concurrent)</label>
-          <input type="number" class="form-input" v-model="startConfig.max_concurrent" min="1" max="10" />
-          <div style="font-size: 0.65rem; color: var(--gray-500); margin-top: 4px;">同时运行的模型数量（0表示不限制）</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">请求间隔 (秒)</label>
-          <input type="number" class="form-input" v-model="startConfig.interval" min="0" max="60" step="0.5" />
-          <div style="font-size: 0.65rem; color: var(--gray-500); margin-top: 4px;">每轮测试之间的等待时间</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">测试名称（可选）</label>
-          <input type="text" class="form-input" v-model="startConfig.test_name" placeholder="自动生成" />
-          <div style="font-size: 0.65rem; color: var(--gray-500); margin-top: 4px;">用于标识这次测试，方便历史记录查找</div>
-        </div>
-        <div class="form-actions">
-          <button class="btn btn-secondary" @click="hideStartConfig">取消</button>
-          <button class="btn btn-primary" @click="confirmStartTest">确认启动</button>
-        </div>
-      </div>
-    </div>
+    <StartConfigModal
+      :visible="startConfigVisible"
+      :config="startConfig"
+      :testCases="config.test_cases || []"
+      :folders="config.folders || []"
+      :selectedCases="selectedCases"
+      @cancel="hideStartConfig"
+      @confirm="confirmStartTest"
+    />
 
     <!-- 任务详情 Modal -->
     <div class="modal-overlay" :class="{ show: taskDetailVisible }" @click.self="hideTaskDetail">
@@ -687,12 +685,12 @@
       <div class="ai-analysis-modal">
         <div class="ai-analysis-header">
           <div class="ai-analysis-title">
-            <span class="ai-analysis-title-icon">🤖</span>
+            <span class="ai-analysis-title-icon">◇</span>
             <span>MiniMax M2.7 分析报告</span>
           </div>
           <div class="ai-analysis-actions">
-            <button class="ai-btn" @click="copyAiReport" :disabled="!aiAnalysisContent" title="复制报告">📋 复制</button>
-            <button class="ai-btn" @click="exportAiReportPdf" :disabled="!aiAnalysisContent" title="导出 PDF">📄 PDF</button>
+            <button class="ai-btn" @click="copyAiReport" :disabled="!aiAnalysisContent" title="复制报告">□ 复制</button>
+            <button class="ai-btn" @click="exportAiReportPdf" :disabled="!aiAnalysisContent" title="导出 PDF">◇ PDF</button>
             <button class="ai-analysis-close" @click="closeAiAnalysis" title="关闭">✕</button>
           </div>
         </div>
@@ -721,9 +719,12 @@
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { marked } from 'marked'
+import TreeView from '@/components/dashboard/TreeView.vue'
+import TestSetManagerModal from '@/components/dashboard/modals/TestSetManagerModal.vue'
+import StartConfigModal from '@/components/dashboard/modals/StartConfigModal.vue'
 
 // ===== 状态 =====
-const config = ref<any>(null)
+const config = ref<any>({})
 const isFullscreen = ref(false)
 const sseConnected = ref(false)
 const sseStatus = ref('--')
@@ -842,6 +843,10 @@ const tasks = ref<Record<string, Task>>({})
 const selectedModels = ref<Set<string>>(new Set())
 const selectedCases = ref<Set<string>>(new Set())
 const activeSubTask = ref<Record<string, number>>({})
+
+// TreeView 相关状态
+const caseSearchQuery = ref('')
+const managerModalVisible = ref(false)
 
 // 日志
 interface Log {
@@ -968,7 +973,8 @@ const caseForm = reactive({
   ],
   max_tokens: 500,
   expected_output: '',  // 标准答案（用于质量评估）
-  eval_model: ''        // 校对模型名称
+  eval_model: '',       // 校对模型名称
+  folder_id: ''         // 所属文件夹 ID
 })
 
 // 启动配置
@@ -1931,7 +1937,50 @@ function toggleCase(id: string) {
   } else {
     selectedCases.value.add(id)
   }
+  persistSelectedCases()
+}
+
+function persistSelectedCases() {
   localStorage.setItem('selectedCases', JSON.stringify([...selectedCases.value]))
+}
+
+// 切换文件夹选中（flatten 后代所有用例）
+function toggleFolder(folderId: string) {
+  const allDescendantCaseIds = getFolderDescendantCaseIds(folderId)
+  if (allDescendantCaseIds.length === 0) return
+  
+  const allSelected = allDescendantCaseIds.every(id => selectedCases.value.has(id))
+  if (allSelected) {
+    allDescendantCaseIds.forEach(id => selectedCases.value.delete(id))
+  } else {
+    allDescendantCaseIds.forEach(id => selectedCases.value.add(id))
+  }
+  persistSelectedCases()
+}
+
+// 获取文件夹下所有后代用例 ID
+function getFolderDescendantCaseIds(folderId: string): string[] {
+  const result: string[] = []
+  const folders = config.value?.folders || []
+  const cases = config.value?.test_cases || []
+  
+  // 收集该文件夹及其子文件夹的所有 folder_id
+  const folderIds = new Set<string>()
+  function collectChildFolders(pid: string) {
+    folderIds.add(pid)
+    folders.forEach((f: any) => {
+      if (f.parent_id === pid) collectChildFolders(f.folder_id)
+    })
+  }
+  collectChildFolders(folderId)
+  
+  // 收集这些文件夹下的所有用例
+  cases.forEach((c: any) => {
+    if (c.folder_id && folderIds.has(c.folder_id)) {
+      result.push(c.id)
+    }
+  })
+  return result
 }
 
 function selectAllModels() {
@@ -1946,12 +1995,143 @@ function selectAllModels() {
 
 function selectAllCases() {
   const cases = config.value?.test_cases || []
-  if (selectedCases.value.size === cases.length) {
-    selectedCases.value.clear()
-  } else {
-    cases.forEach((c: any) => selectedCases.value.add(c.id))
+  if (cases.length === 0) return
+  // 全选：选中所有用例
+  cases.forEach((c: any) => selectedCases.value.add(c.id))
+  persistSelectedCases()
+}
+
+function deselectAllCases() {
+  selectedCases.value.clear()
+  persistSelectedCases()
+}
+
+// ===== TreeView 管理弹窗相关函数 =====
+
+// 打开测试集管理器弹窗
+function showManagerModal() {
+  managerModalVisible.value = true
+}
+
+// 关闭测试集管理器弹窗（刷新配置）
+async function closeManagerModal() {
+  managerModalVisible.value = false
+  await loadConfig()
+}
+
+// 文件夹重命名
+async function handleRenameFolder(folderId: string, name: string) {
+  const newName = name || prompt('请输入新文件夹名称：')
+  if (!newName || !newName.trim()) return
+  try {
+    const res = await fetch(`/config/test-case-folders/${folderId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName.trim() })
+    })
+    if (res.ok) {
+      await loadConfig()
+      showToast('文件夹已重命名', 'success')
+    } else {
+      const err = await res.json()
+      showToast(err.error || '重命名失败', 'error')
+    }
+  } catch (e) {
+    showToast('重命名失败', 'error')
   }
-  localStorage.setItem('selectedCases', JSON.stringify([...selectedCases.value]))
+}
+
+// 移动用例到指定文件夹
+async function handleMoveCase(caseId: string, targetFolderId: string | null) {
+  try {
+    const res = await fetch(`/config/test-cases/${caseId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_id: targetFolderId })
+    })
+    if (res.ok) {
+      await loadConfig()
+      showToast('用例已移动', 'success')
+    } else {
+      const err = await res.json()
+      showToast(err.error || '移动失败', 'error')
+    }
+  } catch (e) {
+    showToast('移动失败', 'error')
+  }
+}
+
+// 删除文件夹
+async function handleDeleteFolder(folderId: string) {
+  if (!confirm('删除此文件夹？子文件夹也会被删除，用例将移回未分类。')) return
+  try {
+    const res = await fetch(`/config/test-case-folders/${folderId}`, { method: 'DELETE' })
+    if (res.ok) {
+      await loadConfig()
+      // 清除已选中但可能已不存在的用例引用
+      persistSelectedCases()
+      showToast('文件夹已删除', 'success')
+    } else {
+      const err = await res.json()
+      showToast(err.error || '删除失败', 'error')
+    }
+  } catch (e) {
+    showToast('删除失败', 'error')
+  }
+}
+
+// 编辑用例（从管理弹窗触发）
+function editCaseById(caseId: string) {
+  const caseItem = config.value?.test_cases?.find((c: any) => c.id === caseId)
+  if (!caseItem) {
+    showToast('用例不存在', 'error')
+    return
+  }
+  // 填充编辑表单
+  currentEditCaseId.value = caseId
+  modalType.value = 'case'
+  Object.assign(caseForm, {
+    name: caseItem.name,
+    messages: caseItem.messages || [{ role: 'user', content: '' }],
+    max_tokens: caseItem.max_tokens || 500,
+    expected_output: caseItem.expected_output || '',
+    eval_model: caseItem.eval_model || '',
+    folder_id: caseItem.folder_id || null
+  })
+  modalVisible.value = true
+}
+
+// 从管理弹窗删除用例
+async function deleteCaseFromManager(caseId: string) {
+  await deleteCase(caseId)
+}
+
+// 展开所有文件夹
+function handleExpandAll(folderId: string) {
+  // 通过 DOM 操作触发 TreeItem 展开
+  // TreeView 内部维护展开状态，这里通过事件通知
+  const folders = config.value?.folders || []
+  function expandRecursive(pid: string) {
+    const folder = folders.find((f: any) => f.folder_id === pid)
+    if (folder) {
+      (folder as any)._expanded = true
+      folders.filter((f: any) => f.parent_id === pid).forEach((f: any) => expandRecursive(f.folder_id))
+    }
+  }
+  expandRecursive(folderId)
+}
+
+// 折叠所有文件夹
+function handleCollapseAll(folderId: string) {
+  const folders = config.value?.folders || []
+  function collapseRecursive(pid: string) {
+    const folder = folders.find((f: any) => f.folder_id === pid)
+    if (folder) {
+      (folder as any)._expanded = false
+      folders.filter((f: any) => f.parent_id === pid).forEach((f: any) => collapseRecursive(f.folder_id))
+    }
+  }
+  collapseRecursive(folderId)
 }
 
 // Modal
@@ -3755,6 +3935,59 @@ onUnmounted(() => {
   }
 }
 
+.tree-view-wrapper {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+  /* 与 TreeView 内部卡片无缝融合，无额外边框 */
+}
+
+.tree-search-input {
+  width: 120px;
+  padding: 3px 8px;
+  border: 1px solid var(--line-tertiary);
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  background: transparent;
+  color: var(--line-primary);
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-default);
+}
+
+.tree-search-input:focus {
+  border-color: var(--line-accent);
+  border-width: 2px;
+  padding: 2px 7px;
+}
+
+.tree-search-input::placeholder {
+  color: var(--line-tertiary);
+}
+
+.manager-btn {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line-tertiary);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  color: var(--line-secondary);
+  transition: all var(--duration-fast) var(--ease-default);
+  padding: 0;
+}
+
+.manager-btn:hover {
+  border-color: var(--line-accent);
+  color: var(--line-accent);
+  background: var(--gray-50);
+}
+
 .item-list {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -4619,7 +4852,7 @@ onUnmounted(() => {
     
     /* 小球内显示进度 */
     .log-panel-header::after {
-      content: '📋';
+      content: '□';
       font-size: 24px;
     }
   }

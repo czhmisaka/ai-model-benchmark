@@ -25,11 +25,26 @@ export interface TestCase {
   // 标准答案相关
   expected_output?: string  // 标准答案（可选）
   eval_model?: string       // 校对模型名称（可选）
+  // 文件夹相关
+  folder_id?: string | null  // 所属文件夹ID
+}
+
+export interface TreeNode {
+  folder_id: string
+  name: string
+  parent_id: string | null
+  sort_order: number
+  children: TreeNode[]
+  // 前端运行时追加
+  _expanded?: boolean
+  _matched?: boolean
+  _hasMatchInChildren?: boolean
 }
 
 export interface Config {
   models: Model[]
   test_cases: TestCase[]
+  folders: TreeNode[]
 }
 
 export function useConfig() {
@@ -86,6 +101,69 @@ export function useConfig() {
     return result
   }
   
+  // Folder 操作
+  async function loadFolders(): Promise<TreeNode[]> {
+    try {
+      const res = await fetch('/config/test-case-folders')
+      const result = await res.json()
+      if (result.error) throw new Error(result.error)
+      return result.folders || []
+    } catch (e) {
+      console.error('Failed to load folders:', e)
+      return []
+    }
+  }
+
+  async function createFolder(data: { name: string; parent_id?: string | null }): Promise<TreeNode[]> {
+    const res = await fetch('/config/test-case-folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    const result = await res.json()
+    if (result.error) throw new Error(result.error)
+    config.value!.folders = result.folders
+    return result.folders
+  }
+
+  async function updateFolder(folder_id: string, data: { name?: string; parent_id?: string | null }): Promise<TreeNode[]> {
+    const res = await fetch(`/config/test-case-folders/${folder_id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    const result = await res.json()
+    if (result.error) throw new Error(result.error)
+    config.value!.folders = result.folders
+    return result.folders
+  }
+
+  async function deleteFolder(folder_id: string): Promise<TreeNode[]> {
+    if (!confirm('删除文件夹会将其中所有测试用例移回未分类，确认删除？')) {
+      throw new Error('Cancelled')
+    }
+    const res = await fetch(`/config/test-case-folders/${folder_id}`, {
+      method: 'DELETE'
+    })
+    const result = await res.json()
+    if (result.error) throw new Error(result.error)
+    config.value!.folders = result.folders
+    return result.folders
+  }
+
+  // 移动测试用例
+  async function moveTestCase(id: string, folder_id: string | null) {
+    const res = await fetch(`/config/test-cases/${id}/move`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_id })
+    })
+    const result = await res.json()
+    if (result.error) throw new Error(result.error)
+    config.value!.test_cases = result.test_cases
+    return result
+  }
+
   // Test Case 操作
   async function addTestCase(data: Omit<TestCase, 'id'>) {
     if (!data.name || !data.messages?.some((m: any) => m.content?.trim())) {
@@ -129,6 +207,11 @@ export function useConfig() {
     addModel,
     updateModel,
     deleteModel,
+    loadFolders,
+    createFolder,
+    updateFolder,
+    deleteFolder,
+    moveTestCase,
     addTestCase,
     updateTestCase,
     deleteTestCase

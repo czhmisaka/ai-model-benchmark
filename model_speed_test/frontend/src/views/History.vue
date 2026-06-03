@@ -39,6 +39,12 @@
           <span class="meta-tag" v-if="item.config?.test_cases">{{ item.config.test_cases.length }} 用例</span>
           <span class="meta-tag">{{ item.total_rounds }} 轮</span>
         </div>
+        <div class="item-cases" v-if="item.config?.test_cases?.length">
+          <div v-for="tc in item.config.test_cases" :key="tc" class="case-row">
+            <span class="case-name">{{ tc }}</span>
+            <span v-if="item.config?.case_folder_map?.[tc]?.folder_name" class="folder-tag">📁 {{ item.config.case_folder_map[tc].folder_name }}</span>
+          </div>
+        </div>
         <div class="item-metrics">
           <span class="metric success">✓ {{ item.success_count || 0 }}</span>
           <span class="metric failed" v-if="item.failed_count">✗ {{ item.failed_count }}</span>
@@ -501,7 +507,7 @@ watch(() => selectedGroup.value, (val) => {
   .item-meta {
     display: flex;
     gap: 8px;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
     
     .meta-tag {
       font-size: 12px;
@@ -509,6 +515,37 @@ watch(() => selectedGroup.value, (val) => {
       background: var(--gray-700);
       color: var(--gray-300);
       border-radius: 4px;
+    }
+  }
+
+  .item-cases {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 12px;
+
+    .case-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+
+      .case-name {
+        font-size: 12px;
+        color: var(--gray-300);
+        padding: 1px 6px;
+        background: var(--gray-750);
+        border-radius: 3px;
+        border: 1px solid var(--gray-600);
+      }
+
+      .folder-tag {
+        font-size: 11px;
+        color: var(--accent);
+        padding: 1px 5px;
+        border: 1px solid var(--accent-dim);
+        border-radius: 3px;
+        white-space: nowrap;
+      }
     }
   }
   
