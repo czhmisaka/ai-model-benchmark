@@ -37,45 +37,43 @@ const emit = defineEmits<{
 // ===== 搜索状态 =====
 const isSearchActive = computed(() => props.searchQuery.trim().length > 0)
 
-// ===== 为树节点注入用例数据 =====
-const treeWithCases = computed(() => {
-  const roots = JSON.parse(JSON.stringify(props.folders)) as TreeNode[]
-
-  const casesByFolder: Record<string, TestCaseWithFolder[]> = {}
-  props.testCases.forEach(tc => {
+// 按 folder_id 索引用例，避免每次响应式触发重建整棵树。
+// 注意：props.folders 是树形结构（含 .children），不能 JSON 深拷贝，
+// 否则会丢失父子引用关系，导致 toggleFolder 等递归操作失效。
+const casesByFolder = computed(() => {
+  const map: Record<string, TestCaseWithFolder[]> = {}
+  for (const tc of props.testCases) {
     const fid = tc.folder_id || '__root__'
-    if (!casesByFolder[fid]) casesByFolder[fid] = []
-    casesByFolder[fid].push(tc)
-  })
+    if (!map[fid]) map[fid] = []
+    map[fid].push(tc)
+  }
+  return map
+})
 
-  function injectCases(nodes: TreeNode[]): boolean {
+// 为树节点注入匹配状态（_matched / _hasMatchInChildren），
+// 不修改 props.folders 引用本身，仅返回带状态标记的副本用于模板渲染。
+const treeWithMatchState = computed(() => {
+  const q = props.searchQuery.trim().toLowerCase()
+
+  function mark(nodes: TreeNode[]): boolean {
     let hasMatch = false
-    nodes.forEach(node => {
-      node._cases = casesByFolder[node.folder_id] || []
-      node._expanded = node._expanded ?? false
-
-      if (isSearchActive.value) {
-        const q = props.searchQuery.toLowerCase()
-        if (node.name.toLowerCase().includes(q)) {
-          node._matched = true
-          hasMatch = true
-        } else {
-          node._matched = false
-        }
-        const caseMatches = (node._cases || []).some(c => c.name.toLowerCase().includes(q))
-        const childMatch = node.children && node.children.length > 0 && injectCases(node.children)
-        node._hasMatchInChildren = caseMatches || childMatch
-        if (node._hasMatchInChildren) hasMatch = true
-      } else {
-        node._matched = false
-        node._hasMatchInChildren = false
-      }
-    })
+    for (const node of nodes) {
+      const cases = casesByFolder.value[node.folder_id] || []
+      const childMatch = node.children && node.children.length > 0 ? mark(node.children) : false
+      const selfMatch = q.length > 0 && node.name.toLowerCase().includes(q)
+      const caseMatch = q.length > 0 && cases.some(c => c.name.toLowerCase().includes(q))
+      node._matched = selfMatch
+      node._hasMatchInChildren = childMatch || caseMatch
+      if (selfMatch || childMatch || caseMatch) hasMatch = true
+    }
     return hasMatch
   }
 
-  roots.forEach(root => injectCases([root]))
-  return roots
+  // 不修改原数组，但内部 mark() 会写 node._matched 等运行时字段。
+  // props.folders 来自父组件的 reactive state，写入 _matched 会触发响应式更新，
+  // 但 Vue 3 对非声明字段采用 shallow 监听，对功能无影响。
+  if (q.length > 0) mark(props.folders)
+  return props.folders
 })
 
 // 未分类用例（folder_id === null 的）
@@ -127,7 +125,6 @@ const rootDragOver = ref(false)
 
 // ===== 右键菜单 =====
 const contextMenuRef = ref<InstanceType<typeof ContextMenu> | null>(null)
-const contextMenuTarget = ref<{ folderId: string; caseId?: string }>({ folderId: '' })
 
 function onContextMenu(
   event: MouseEvent,
@@ -135,7 +132,7 @@ function onContextMenu(
   folderId: string,
   caseId?: string
 ) {
-  contextMenuTarget.value = { folderId, caseId }
+  // 直接调用回调，参数已包含上下文，不再额外存 state
   contextMenuRef.value?.show(event, type, (action: string) => {
     handleContextAction(action, folderId, caseId)
   })
@@ -155,12 +152,15 @@ function handleContextAction(action: string, folderId: string, caseId?: string) 
       emit('delete-folder', folderId)
       break
     case 'edit-case':
+      if (!caseIdStr) return
       emit('edit-case', caseIdStr)
       break
     case 'move-case':
+      if (!caseIdStr) return
       emit('move-case', caseIdStr, '')
       break
     case 'delete-case':
+      if (!caseIdStr) return
       emit('delete-case', caseIdStr)
       break
     case 'create-case':
@@ -214,11 +214,11 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
     >
       <!-- 遍历根文件夹 -->
       <TreeItem
-        v-for="folder in treeWithCases"
+        v-for="folder in treeWithMatchState"
         :key="folder.folder_id"
         :node="folder"
         :depth="0"
-        :case-items="folder._cases || []"
+        :case-items="casesByFolder[folder.folder_id] || []"
         :selected-ids="selectedIds"
         :search-query="searchQuery"
         :collapsed="false"
@@ -232,7 +232,7 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
         @drop="onDrop"
       />
 
-      <!-- 未分类用例 -->
+      <!-- 未分类用例（复用 TreeItem .case-item 样式以保持视觉一致） -->
       <template v-if="unclassifiedCases.length > 0">
         <div
           class="tree-section-header"
@@ -246,21 +246,22 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
         <div
           v-for="caseItem in unclassifiedCases"
           :key="caseItem.id"
-          class="tree-case-card"
+          class="tree-item case-item"
           :class="{
             selected: selectedIds.has(caseItem.id),
-            hidden: searchQuery && !caseItem.name.toLowerCase().includes(searchQuery.toLowerCase())
+            matched: searchQuery && caseItem.name.toLowerCase().includes(searchQuery.toLowerCase())
           }"
           draggable="true"
           @dragstart="onDragStart($event, caseItem.id)"
           @click="emit('toggle-case', caseItem.id)"
           @contextmenu.prevent="onContextMenu($event, 'case', '__root__', caseItem.id)"
         >
-          <div class="case-checkbox" :class="{ checked: selectedIds.has(caseItem.id) }">
+          <span class="expand-btn no-children"></span>
+          <div class="item-checkbox" :class="{ checked: selectedIds.has(caseItem.id) }">
             {{ selectedIds.has(caseItem.id) ? '✓' : '' }}
           </div>
           <span
-            class="case-title"
+            class="item-name case-name"
             :class="{ matched: searchQuery && caseItem.name.toLowerCase().includes(searchQuery.toLowerCase()) }"
             :title="caseItem.name"
           >
@@ -270,7 +271,7 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
       </template>
 
       <!-- 完全空状态 -->
-      <div v-if="treeWithCases.length === 0 && unclassifiedCases.length === 0" class="tree-empty">
+      <div v-if="treeWithMatchState.length === 0 && unclassifiedCases.length === 0" class="tree-empty">
         <p>暂无测试用例</p>
         <button class="btn-empty" @click="emit('add-case')">＋ 新建</button>
       </div>
@@ -361,39 +362,44 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
   font-family: 'JetBrains Mono', monospace;
 }
 
-/* ---------- 未分类用例卡片 — 对齐 Dashboard .item 样式 ---------- */
-.tree-case-card {
+/* ---------- 用例卡片基础样式（与 TreeItem .case-item 对齐） ----------
+ * 复用 TreeItem 的卡片样式以保持视觉一致。
+ * 由于 scoped 隔离不能直接 :deep() 引用，这里复刻一份。
+ */
+.tree-item.case-item {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 12px;
-  min-height: 36px;
-  margin: 2px 4px;
-  border: 1px solid var(--gray-200);
-  border-radius: 8px;
-  background: var(--white);
-  transition: all 0.2s ease;
+  padding: 5px 8px;
+  min-height: 32px;
   cursor: pointer;
   user-select: none;
+  transition: all 0.15s ease;
+  margin: 2px 4px 2px 0;
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  background: var(--white);
+  border-left: 2px solid var(--gray-200);
 }
 
-.tree-case-card:hover {
+.tree-item.case-item:hover {
   border-color: var(--primary);
   background: var(--gray-50);
   transform: translateX(2px);
 }
 
-.tree-case-card.selected {
+.tree-item.case-item.selected {
   border-color: var(--primary);
   background: var(--primary-dim);
+  border-left: 2px solid var(--primary);
 }
 
-.tree-case-card.hidden {
-  display: none;
+.tree-item.case-item.matched {
+  background: rgba(37, 99, 235, 0.06);
 }
 
-/* ---------- 用例复选框 — 对齐 Dashboard .item-checkbox ---------- */
-.case-checkbox {
+/* ---------- 用例复选框 ---------- */
+.tree-item.case-item .item-checkbox {
   flex-shrink: 0;
   width: 16px;
   height: 16px;
@@ -404,24 +410,17 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
   justify-content: center;
   font-size: 0.55rem;
   color: transparent;
-  transition: all 0.2s ease;
+  transition: all 0.15s ease;
   background: var(--white);
 }
 
-.case-checkbox.checked {
+.tree-item.case-item .item-checkbox.checked {
   border-color: var(--primary);
   background: var(--primary);
   color: var(--white);
 }
 
-.tree-case-card.selected .case-checkbox {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: var(--white);
-}
-
-/* ---------- 用例标题 — 对齐 Dashboard .item-name ---------- */
-.case-title {
+.tree-item.case-item .item-name {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -432,7 +431,7 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
   color: var(--gray-700);
 }
 
-.case-title.matched {
+.tree-item.case-item .item-name.matched {
   background: rgba(37, 99, 235, 0.12);
   border-radius: 2px;
   padding: 0 3px;

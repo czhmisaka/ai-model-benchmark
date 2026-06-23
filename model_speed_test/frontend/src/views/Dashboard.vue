@@ -85,7 +85,7 @@
               placeholder="搜索…"
               title="搜索测试用例"
             />
-            <button class="manager-btn" @click="openManager" title="管理测试集">⚙</button>
+            <button class="manager-btn" @click="showManagerModal" title="管理测试集">⚙</button>
           </div>
         </div>
         <div class="item-list tree-view-wrapper" id="caseList">
@@ -95,6 +95,7 @@
             :test-cases="config.test_cases || []"
             :selected-ids="selectedCases"
             :search-query="caseSearchQuery"
+            :hide-toolbar="false"
             @toggle-folder="toggleFolder"
             @toggle-case="toggleCase"
             @select-all="selectAllCases"
@@ -274,6 +275,13 @@
             <label class="form-label">Model</label>
             <input type="text" class="form-input" v-model="modelForm.model" placeholder="gpt-4o-mini" />
           </div>
+          <div class="form-group form-group-inline">
+            <label class="form-checkbox-label">
+              <input type="checkbox" v-model="modelForm.supports_vision" />
+              <span>支持多模态（图片输入）</span>
+            </label>
+            <span class="form-hint">开启后允许向该模型发送包含图片的多模态用例</span>
+          </div>
           <!-- 测试按钮 -->
           <div class="form-group">
             <button 
@@ -436,6 +444,22 @@
         </div>
       </div>
     </div>
+
+    <!-- 测试集管理 Modal -->
+    <TestSetManagerModal
+      v-if="managerModalVisible"
+      :visible="managerModalVisible"
+      :folders="config.folders || []"
+      :test-cases="config.test_cases || []"
+      @close="closeManagerModal"
+      @create-folder="handleCreateFolder"
+      @rename-folder="handleRenameFolder"
+      @delete-folder="handleDeleteFolder"
+      @create-case="handleCreateCaseFromManager"
+      @edit-case="handleEditCaseFromManager"
+      @move-case="handleMoveCase"
+      @delete-case="deleteCase"
+    />
 
     <!-- 测试启动配置 Modal -->
     <StartConfigModal
@@ -1053,7 +1077,8 @@ const modelForm = reactive({
   max_tokens: 4096,
   presence_penalty: 0.0,
   frequency_penalty: 0.0,
-  thinking_enabled: true
+  thinking_enabled: true,
+  supports_vision: false
 })
 const caseForm = reactive({
   name: '',
@@ -1063,7 +1088,25 @@ const caseForm = reactive({
   max_tokens: 500,
   expected_output: '',  // 标准答案（用于质量评估）
   eval_model: '',       // 校对模型名称
-  folder_id: ''         // 所属文件夹 ID
+  folder_id: null       // 所属文件夹 ID（null 表示未分类）
+})
+
+// 扁平化文件夹列表，供 ModelCaseModal 下拉选择器使用。
+// 嵌套文件夹以 "父 / 子" 形式展示，便于用户识别层级。
+const flatFolderOptions = computed(() => {
+  const folders = (config.value?.folders || []) as any[]
+  const opts: { label: string; value: string }[] = [
+    { label: '未分类（根目录）', value: '' }
+  ]
+  function walk(nodes: any[], prefix: string) {
+    for (const n of nodes) {
+      const label = prefix ? `${prefix} / ${n.name}` : n.name
+      opts.push({ label: `📁 ${label}`, value: n.folder_id })
+      if (n.children?.length) walk(n.children, label)
+    }
+  }
+  walk(folders, '')
+  return opts
 })
 
 // 启动配置
@@ -2059,33 +2102,48 @@ function persistSelectedCases() {
 function toggleFolder(folderId: string) {
   const allDescendantCaseIds = getFolderDescendantCaseIds(folderId)
   if (allDescendantCaseIds.length === 0) return
-  
+
   const allSelected = allDescendantCaseIds.every(id => selectedCases.value.has(id))
   if (allSelected) {
     allDescendantCaseIds.forEach(id => selectedCases.value.delete(id))
   } else {
     allDescendantCaseIds.forEach(id => selectedCases.value.add(id))
   }
+  // Set 是可变对象，Vue 3 对 add/delete 不会自动触发响应式；
+  // 重新赋值以确保 computed/监听器感知到变化
+  selectedCases.value = new Set(selectedCases.value)
   persistSelectedCases()
 }
 
 // 获取文件夹下所有后代用例 ID
 function getFolderDescendantCaseIds(folderId: string): string[] {
   const result: string[] = []
-  const folders = config.value?.folders || []
-  const cases = config.value?.test_cases || []
-  
-  // 收集该文件夹及其子文件夹的所有 folder_id
+  const folders = (config.value?.folders || []) as any[]
+  const cases = (config.value?.test_cases || []) as any[]
+
+  // 后端返回的 folders 是树形结构（含 .children），不能用 f.parent_id === pid 找子节点
+  // 必须递归遍历 .children 收集子树所有 folder_id
   const folderIds = new Set<string>()
-  function collectChildFolders(pid: string) {
-    folderIds.add(pid)
-    folders.forEach((f: any) => {
-      if (f.parent_id === pid) collectChildFolders(f.folder_id)
-    })
+
+  function findNode(nodes: any[], targetId: string): any | null {
+    for (const n of nodes) {
+      if (n.folder_id === targetId) return n
+      if (n.children) {
+        const found = findNode(n.children, targetId)
+        if (found) return found
+      }
+    }
+    return null
   }
-  collectChildFolders(folderId)
-  
-  // 收集这些文件夹下的所有用例
+
+  function collectSubtree(node: any) {
+    folderIds.add(node.folder_id)
+    if (node.children) node.children.forEach(collectSubtree)
+  }
+
+  const root = findNode(folders, folderId)
+  if (root) collectSubtree(root)
+
   cases.forEach((c: any) => {
     if (c.folder_id && folderIds.has(c.folder_id)) {
       result.push(c.id)
@@ -2122,6 +2180,40 @@ function deselectAllCases() {
 // 打开测试集管理器弹窗
 function showManagerModal() {
   managerModalVisible.value = true
+}
+
+// 从管理弹窗创建文件夹
+async function handleCreateFolder(name: string, parentId: string | null) {
+  const folderName = (name || '').trim() || prompt('请输入文件夹名称：')?.trim()
+  if (!folderName) return
+  try {
+    const res = await fetch('/config/test-case-folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: folderName, parent_id: parentId || null })
+    })
+    if (res.ok) {
+      await loadConfig()
+      showToast('文件夹已创建', 'success')
+    } else {
+      const err = await res.json()
+      showToast(err.error || '创建失败', 'error')
+    }
+  } catch (e) {
+    showToast('创建失败', 'error')
+  }
+}
+
+// 从管理弹窗新建测试用例（复用 showModal('case')）
+function handleCreateCaseFromManager() {
+  managerModalVisible.value = false
+  showModal('case')
+}
+
+// 从管理弹窗编辑测试用例（复用 editCaseById）
+function handleEditCaseFromManager(caseId: string) {
+  managerModalVisible.value = false
+  editCaseById(caseId)
 }
 
 // 关闭测试集管理器弹窗（刷新配置）
@@ -2261,8 +2353,8 @@ function showModal(type: 'model' | 'case') {
 function hideModal() {
   modalVisible.value = false
   // 重置表单
-  Object.assign(modelForm, { name: '', endpoint: '', api_key: '', model: '' })
-  Object.assign(caseForm, { name: '', messages: [{ role: 'user', content: '' }], max_tokens: 500, expected_output: '', eval_model: '' })
+  Object.assign(modelForm, { name: '', endpoint: '', api_key: '', model: '', supports_vision: false })
+  Object.assign(caseForm, { name: '', messages: [{ role: 'user', content: '' }], max_tokens: 500, expected_output: '', eval_model: '', folder_id: null })
   // 重置编辑状态
   currentEditCaseId.value = null
   currentEditModelName.value = null
@@ -2348,7 +2440,8 @@ async function submitModal() {
       endpoint: modelForm.endpoint,
       api_key: modelForm.api_key,
       model: modelForm.model,
-      enabled: true
+      enabled: true,
+      extra_params: { supports_vision: !!modelForm.supports_vision }
     }
     // 使用旧名称作为 URL 参数进行更新
     const oldName = currentEditModelName.value
@@ -2409,7 +2502,8 @@ async function submitModal() {
       endpoint: modelForm.endpoint,
       api_key: modelForm.api_key,
       model: modelForm.model,
-      enabled: true
+      enabled: true,
+      extra_params: { supports_vision: !!modelForm.supports_vision }
     }
     if (!data.name || !data.endpoint || !data.model) {
       showToast('Please fill all fields', 'error')
@@ -2435,7 +2529,8 @@ async function submitModal() {
       temperature: 0.7,
       stream: true,
       expected_output: caseForm.expected_output,
-      eval_model: caseForm.eval_model
+      eval_model: caseForm.eval_model,
+      folder_id: caseForm.folder_id || null  // null 表示未分类
     }
     // 检查是否至少有一条消息有内容（兼容纯文本与多模态分块；多模态至少一个 text 或 image part 有内容）
     const hasContent = caseForm.messages.some((msg: any) => {
@@ -3280,10 +3375,11 @@ function editModel(model: any) {
   modelForm.presence_penalty = model.presence_penalty ?? 0.0
   modelForm.frequency_penalty = model.frequency_penalty ?? 0.0
   modelForm.thinking_enabled = model.thinking_enabled ?? true
-  
+  modelForm.supports_vision = !!(model.extra_params && model.extra_params.supports_vision)
+
   // 保存当前编辑的模型名称
   currentEditModelName.value = model.name
-  
+
   // 显示模态框
   modalType.value = 'model'
   modalVisible.value = true
@@ -5555,6 +5651,34 @@ onUnmounted(() => {
 
 .form-group {
   margin-bottom: 14px;
+}
+
+.form-group-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.form-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--gray-800);
+  cursor: pointer;
+  user-select: none;
+
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+  }
+}
+
+.form-hint {
+  font-size: 0.7rem;
+  color: var(--gray-500);
 }
 
 .form-label {

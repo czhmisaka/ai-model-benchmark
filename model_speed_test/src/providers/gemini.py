@@ -32,10 +32,11 @@ class GeminiProvider(BaseLLMProvider):
     def __init__(self, config: ModelConfig):
         super().__init__(config)
         self._session: Optional[aiohttp.ClientSession] = None
-        
+
         # Gemini 特定的参数
-        self.safety_settings = config.extra_params.get("safety_settings", [])
-        self.generation_config = config.extra_params.get("generation_config", {})
+        ep = config.extra_params or {}
+        self.safety_settings = ep.get("safety_settings", [])
+        self.generation_config = ep.get("generation_config", {})
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """获取或创建 HTTP 会话"""

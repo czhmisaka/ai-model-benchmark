@@ -41,6 +41,30 @@ const items = ref<MenuItem[]>([])
 const activeIndex = ref(-1)
 let currentCallback: ((action: string) => void) | null = null
 
+// 计算每个 menu item 在 "action 项" 序列中的索引（用于键盘导航）。
+// 用 Map 缓存，避免每次渲染都 filter+indexOf（旧实现因引用比较失败导致键位错位）。
+const actionIndexMap = computed(() => {
+  const map = new Map<string, number>()
+  let i = 0
+  for (const it of items.value) {
+    if (!it.separator) {
+      map.set(it.action, i++)
+    }
+  }
+  return map
+})
+
+function isItemActive(action: string): boolean {
+  return actionIndexMap.value.get(action) === activeIndex.value
+}
+
+function handleClick(action: string) {
+  if (currentCallback) {
+    currentCallback(action)
+  }
+  close()
+}
+
 // ===== 显示菜单 =====
 function show(
   event: MouseEvent,
@@ -106,33 +130,25 @@ function handleKeydown(event: KeyboardEvent) {
     return
   }
 
-  const actionItems = items.value.filter(i => !i.separator)
+  const actionCount = actionIndexMap.value.size
   if (event.key === 'ArrowDown') {
     event.preventDefault()
-    activeIndex.value = Math.min(activeIndex.value + 1, actionItems.length - 1)
-    // 找到对应的原始索引
+    activeIndex.value = activeIndex.value < 0
+      ? 0
+      : Math.min(activeIndex.value + 1, actionCount - 1)
   } else if (event.key === 'ArrowUp') {
     event.preventDefault()
-    activeIndex.value = Math.max(activeIndex.value - 1, 0)
+    activeIndex.value = activeIndex.value <= 0
+      ? 0
+      : Math.min(activeIndex.value - 1, actionCount - 1)
   } else if (event.key === 'Enter' && activeIndex.value >= 0) {
     event.preventDefault()
-    const item = actionItems[activeIndex.value]
-    if (item && currentCallback) {
-      currentCallback(item.action)
+    const action = [...actionIndexMap.value.keys()][activeIndex.value]
+    if (action && currentCallback) {
+      currentCallback(action)
       close()
     }
   }
-}
-
-function handleClick(action: string) {
-  if (currentCallback) {
-    currentCallback(action)
-  }
-  close()
-}
-
-function getItemIndex(actionItems: MenuItem[], action: string): number {
-  return actionItems.findIndex(i => i.action === action)
 }
 
 // ===== 暴露方法 =====
@@ -158,10 +174,10 @@ defineExpose({
           class="context-menu-item"
           :class="{
             danger: item.danger,
-            active: activeIndex === items.filter(i => !i.separator).indexOf(item),
+            active: isItemActive(item.action),
           }"
           @click="handleClick(item.action)"
-          @mouseenter="activeIndex = items.filter(i => !i.separator).indexOf(item)"
+          @mouseenter="activeIndex = actionIndexMap.get(item.action) ?? -1"
         >
           {{ item.label }}
         </div>

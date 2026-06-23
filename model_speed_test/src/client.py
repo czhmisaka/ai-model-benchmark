@@ -70,7 +70,9 @@ class ModelClient:
         provider_class = registry.get(provider)
         if provider_class is None:
             provider_class = registry.get("openai")
-        
+        if provider_class is None:
+            raise ValueError(f"Unknown provider: {provider}")
+
         from .providers.base import ModelConfig
         config = ModelConfig(
             name=name,
@@ -79,7 +81,7 @@ class ModelClient:
             model=model,
             provider=provider,
             timeout=timeout,
-            extra_params=extra_params,
+            extra_params=extra_params or {},
             thinking_enabled=thinking_enabled,
             temperature=temperature,
             top_p=top_p,
@@ -87,8 +89,11 @@ class ModelClient:
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty
         )
-        
-        self.provider = provider_class(config)
+
+        # 走 registry.create 而非 provider_class(config)，
+        # 以确保 provider_capability 被正确挂载（用于 supports_vision 等能力回退）
+        provider_instance = registry.create(provider, config)
+        self.provider = provider_instance if provider_instance is not None else provider_class(config)
         logger.info(f"[ModelClient] 初始化 {name} (provider={provider}, model={model})")
     
     async def chat(

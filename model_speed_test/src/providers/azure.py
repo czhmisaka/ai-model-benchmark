@@ -28,10 +28,11 @@ class AzureOpenAIProvider(BaseLLMProvider):
     def __init__(self, config: ModelConfig):
         super().__init__(config)
         self._session: Optional[aiohttp.ClientSession] = None
-        
+
         # Azure 特定的参数
-        self.api_version = config.extra_params.get("api_version", "2024-02-01")
-        self.deployment_name = config.extra_params.get("deployment_name", config.model)
+        ep = config.extra_params or {}
+        self.api_version = ep.get("api_version", "2024-02-01")
+        self.deployment_name = ep.get("deployment_name", config.model)
         
         # Azure 使用特殊的端点格式
         # 格式: https://{resource}.openai.azure.com/openai/deployments/{deployment}/

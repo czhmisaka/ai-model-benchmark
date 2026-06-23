@@ -230,11 +230,15 @@ async def get_config():
             # 获取模型
             cursor.execute("""
                 SELECT id, name, provider, endpoint, api_key, model, enabled,
-                       temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled 
+                       temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled, extra_params
                 FROM models
             """)
             models = []
             for row in cursor.fetchall():
+                try:
+                    extra_params = json.loads(row["extra_params"]) if row["extra_params"] else {}
+                except (json.JSONDecodeError, TypeError):
+                    extra_params = {}
                 models.append({
                     "id": row["id"],
                     "name": row["name"],
@@ -248,7 +252,8 @@ async def get_config():
                     "max_tokens": row["max_tokens"] if row["max_tokens"] is not None else 4096,
                     "presence_penalty": row["presence_penalty"] if row["presence_penalty"] is not None else 0.0,
                     "frequency_penalty": row["frequency_penalty"] if row["frequency_penalty"] is not None else 0.0,
-                    "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True
+                    "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True,
+                    "extra_params": extra_params,
                 })
             
             # 获取测试用例（含 folder_id）
@@ -379,20 +384,24 @@ async def add_model(model_data: dict):
             thinking_enabled = 1 if model_data.get("thinking_enabled", True) else 0
             
             cursor.execute("""
-                INSERT INTO models (model_id, name, provider, endpoint, api_key, model, group_name, tags, metadata, enabled, status, health_check_enabled, health_check_result, created_at, updated_at, temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (model_id, name, provider, endpoint, api_key, model, "production", "[]", "{}", enabled, "active", 1, "{}", datetime.now().isoformat(), datetime.now().isoformat(), temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled))
-            
+                INSERT INTO models (model_id, name, provider, endpoint, api_key, model, group_name, tags, metadata, enabled, status, health_check_enabled, health_check_result, created_at, updated_at, temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled, extra_params)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (model_id, name, provider, endpoint, api_key, model, "production", "[]", "{}", enabled, "active", 1, "{}", datetime.now().isoformat(), datetime.now().isoformat(), temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled, json.dumps(model_data.get("extra_params") or {})))
+
             conn.commit()
-            
+
             # 返回更新后的所有模型列表（包含所有参数字段）
             cursor.execute("""
                 SELECT id, name, provider, endpoint, api_key, model, enabled,
-                       temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled
+                       temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled, extra_params
                 FROM models
             """)
             models = []
             for row in cursor.fetchall():
+                try:
+                    extra_params = json.loads(row["extra_params"]) if row["extra_params"] else {}
+                except (json.JSONDecodeError, TypeError):
+                    extra_params = {}
                 models.append({
                     "id": row["id"],
                     "name": row["name"],
@@ -406,7 +415,8 @@ async def add_model(model_data: dict):
                     "max_tokens": row["max_tokens"] if row["max_tokens"] is not None else 4096,
                     "presence_penalty": row["presence_penalty"] if row["presence_penalty"] is not None else 0.0,
                     "frequency_penalty": row["frequency_penalty"] if row["frequency_penalty"] is not None else 0.0,
-                    "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True
+                    "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True,
+                    "extra_params": extra_params,
                 })
             
             conn.close()
@@ -474,6 +484,9 @@ async def update_model(model_name: str, model_data: dict):
             if "thinking_enabled" in model_data:
                 updates.append("thinking_enabled = ?")
                 params.append(1 if model_data["thinking_enabled"] else 0)
+            if "extra_params" in model_data:
+                updates.append("extra_params = ?")
+                params.append(json.dumps(model_data["extra_params"] or {}))
             
             updates.append("updated_at = ?")
             params.append(datetime.now().isoformat())
@@ -499,15 +512,19 @@ async def update_model(model_name: str, model_data: dict):
             if cursor.rowcount == 0:
                 conn.close()
                 return {"error": "模型不存在"}
-            
+
             # 返回更新后的所有模型列表（包含所有参数字段）
             cursor.execute("""
                 SELECT id, name, provider, endpoint, api_key, model, enabled,
-                       temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled
+                       temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled, extra_params
                 FROM models
             """)
             models = []
             for row in cursor.fetchall():
+                try:
+                    extra_params = json.loads(row["extra_params"]) if row["extra_params"] else {}
+                except (json.JSONDecodeError, TypeError):
+                    extra_params = {}
                 models.append({
                     "id": row["id"],
                     "name": row["name"],
@@ -521,7 +538,8 @@ async def update_model(model_name: str, model_data: dict):
                     "max_tokens": row["max_tokens"] if row["max_tokens"] is not None else 4096,
                     "presence_penalty": row["presence_penalty"] if row["presence_penalty"] is not None else 0.0,
                     "frequency_penalty": row["frequency_penalty"] if row["frequency_penalty"] is not None else 0.0,
-                    "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True
+                    "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True,
+                    "extra_params": extra_params,
                 })
             
             conn.close()

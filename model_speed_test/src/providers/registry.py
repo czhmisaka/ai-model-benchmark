@@ -57,23 +57,32 @@ class ProviderRegistry:
     def create(self, name: str, config: ModelConfig) -> Optional[BaseLLMProvider]:
         """
         创建 Provider 实例
-        
+
         Args:
             name: Provider 名称
             config: 模型配置
-            
+
         Returns:
             Provider 实例，如果不存在则返回 None
         """
         provider_class = self.get(name)
         if not provider_class:
             return None
-        
+
         # 确保配置中的 provider 名称一致
         if config.provider != name:
             config.provider = name
-        
-        return provider_class(config)
+
+        provider = provider_class(config)
+
+        # 挂载 Provider 能力描述（用于 supports_vision 等能力回退路径）。
+        # 若 ModelConfig.extra_params 中已显式声明 supports_vision，则优先使用；
+        # 否则从 PROVIDER_CAPABILITIES 中读取默认值。
+        capability = self.get_capability(name)
+        if capability is not None:
+            provider.provider_capability = capability
+
+        return provider
     
     def list_providers(self) -> List[str]:
         """

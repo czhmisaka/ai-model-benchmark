@@ -47,7 +47,7 @@ class ProviderAdapter:
             frequency_penalty=kwargs.get("frequency_penalty", 0.0),
             thinking_enabled=kwargs.get("thinking_enabled", True),
             timeout=kwargs.get("timeout", 300.0),
-            extra_params=kwargs.get("extra_params", {})
+            extra_params=kwargs.get("extra_params") or {}
         )
         
         # 创建 Provider

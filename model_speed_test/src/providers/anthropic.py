@@ -33,9 +33,10 @@ class AnthropicProvider(BaseLLMProvider):
     def __init__(self, config: ModelConfig):
         super().__init__(config)
         self._session: Optional[aiohttp.ClientSession] = None
-        
+
         # Anthropic 特定的参数
-        self.thinking_budget = config.extra_params.get("thinking_budget_tokens", 10000)
+        ep = config.extra_params or {}
+        self.thinking_budget = ep.get("thinking_budget_tokens", 10000)
         self.include_thoughts = config.thinking_enabled
     
     async def _get_session(self) -> aiohttp.ClientSession:

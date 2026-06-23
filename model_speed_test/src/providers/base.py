@@ -518,8 +518,8 @@ PROVIDER_CAPABILITIES = {
         max_context_length=2000000,
         description="Google Gemini 系列模型，超长上下文"
     ),
-    "local": ProviderCapability(
-        name="local",
+    "lmstudio": ProviderCapability(
+        name="lmstudio",
         display_name="本地模型 (LMStudio/Ollama)",
         api_format="openai",
         supports_streaming=True,
@@ -529,7 +529,7 @@ PROVIDER_CAPABILITIES = {
         supports_json_mode=True,
         default_max_tokens=4096,
         max_context_length=128000,
-        description="本地部署的模型，如 LMStudio、Ollama 等"
+        description="本地部署的模型，如 LMStudio、Ollama 等。注册名 lmstudio/ollama 共享此 capability。"
     ),
     "azure": ProviderCapability(
         name="azure",

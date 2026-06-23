@@ -33,28 +33,56 @@ const selectedFolderId = ref<string | null>(null)
 
 // ===== 详情面板 =====
 const selectedDetail = computed(() => {
-  if (!selectedFolderId.value) return null
-  // 查找文件夹
-  function findFolder(nodes: TreeNode[], id: string): TreeNode | null {
-    for (const n of nodes) {
-      if (n.folder_id === id) return n
-      if (n.children) {
-        const found = findFolder(n.children, id)
-        if (found) return found
+  // 1. 优先展示文件夹详情
+  if (selectedFolderId.value) {
+    function findFolder(nodes: TreeNode[], id: string): TreeNode | null {
+      for (const n of nodes) {
+        if (n.folder_id === id) return n
+        if (n.children) {
+          const found = findFolder(n.children, id)
+          if (found) return found
+        }
+      }
+      return null
+    }
+    const folder = findFolder(props.folders, selectedFolderId.value)
+    if (folder) {
+      const cases = props.testCases.filter(tc => tc.folder_id === folder.folder_id)
+      return {
+        type: 'folder' as const,
+        name: folder.name,
+        folder_id: folder.folder_id,
+        parent_id: folder.parent_id,
+        caseCount: cases.length,
+        cases: cases.map(c => c.name),
       }
     }
-    return null
   }
-  const folder = findFolder(props.folders, selectedFolderId.value)
-  if (folder) {
-    const cases = props.testCases.filter(tc => tc.folder_id === folder.folder_id)
-    return {
-      type: 'folder' as const,
-      name: folder.name,
-      folder_id: folder.folder_id,
-      parent_id: folder.parent_id,
-      caseCount: cases.length,
-      cases: cases.map(c => c.name),
+  // 2. 否则展示选中用例的详情（取首个选中的）
+  for (const id of selectedIds.value) {
+    const tc = props.testCases.find(c => c.id === id)
+    if (tc) {
+      // 查找所属文件夹名
+      function findFolderName(nodes: TreeNode[]): string | null {
+        for (const n of nodes) {
+          if (n.folder_id === tc.folder_id) return n.name
+          if (n.children) {
+            const found = findFolderName(n.children)
+            if (found !== null) return found
+          }
+        }
+        return null
+      }
+      const folderName = tc.folder_id ? findFolderName(props.folders) : null
+      return {
+        type: 'case' as const,
+        name: tc.name,
+        case_id: tc.id,
+        folder_id: tc.folder_id || null,
+        folder_name: folderName,
+        max_tokens: tc.max_tokens || 0,
+        message_count: Array.isArray(tc.messages) ? tc.messages.length : 0,
+      }
     }
   }
   return null
@@ -62,11 +90,15 @@ const selectedDetail = computed(() => {
 
 // ===== TreeView 事件处理 =====
 function handleToggleCase(caseId: string) {
-  // 管理弹窗中，点击用例显示详情
-  const tc = props.testCases.find(c => c.id === caseId)
-  if (tc) {
-    selectedFolderId.value = null // 取消文件夹选中
+  // 管理弹窗中，点击用例 toggle 选中，并清除文件夹选中
+  if (selectedIds.value.has(caseId)) {
+    selectedIds.value.delete(caseId)
+  } else {
+    selectedIds.value.add(caseId)
   }
+  // 触发响应式更新（Set 需要重新赋值）
+  selectedIds.value = new Set(selectedIds.value)
+  selectedFolderId.value = null
 }
 
 function handleToggleFolder(folderId: string) {
@@ -179,6 +211,7 @@ function close() {
               :test-cases="testCases"
               :selected-ids="selectedIds"
               :search-query="searchQuery"
+              :hide-toolbar="false"
               @toggle-case="handleToggleCase"
               @toggle-folder="handleToggleFolder"
               @add-folder="handleAddFolder"
@@ -214,10 +247,44 @@ function close() {
                 </ul>
               </div>
 
+              <div class="detail-info" v-else-if="selectedDetail.type === 'case'">
+                <div class="info-row">
+                  <span class="info-label">所属文件夹</span>
+                  <span class="info-value">{{ selectedDetail.folder_name || '未分类' }}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">消息数</span>
+                  <span class="info-value">{{ selectedDetail.message_count }}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">max_tokens</span>
+                  <span class="info-value">{{ selectedDetail.max_tokens }}</span>
+                </div>
+              </div>
+
               <div class="detail-actions">
-                <button class="btn btn-secondary" @click="handleMoveCaseFromDetail">
-                  移动用例到…
-                </button>
+                <template v-if="selectedDetail.type === 'folder'">
+                  <button class="btn btn-secondary" @click="handleRenameFolder(selectedDetail.folder_id)">
+                    重命名
+                  </button>
+                  <button class="btn btn-secondary" @click="handleDeleteFolder(selectedDetail.folder_id)">
+                    删除
+                  </button>
+                  <button class="btn btn-secondary" @click="handleMoveCaseFromDetail">
+                    移动用例到…
+                  </button>
+                </template>
+                <template v-else-if="selectedDetail.type === 'case'">
+                  <button class="btn btn-secondary" @click="handleEditCase(selectedDetail.case_id)">
+                    编辑
+                  </button>
+                  <button class="btn btn-secondary" @click="handleMoveCase(selectedDetail.case_id, '')">
+                    移动到…
+                  </button>
+                  <button class="btn btn-secondary" @click="handleDeleteCase(selectedDetail.case_id)">
+                    删除
+                  </button>
+                </template>
               </div>
             </template>
 
