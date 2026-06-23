@@ -312,8 +312,8 @@
           <div class="form-group">
             <label class="form-label">Messages</label>
             <div class="messages-editor">
-              <div 
-                v-for="(msg, index) in caseForm.messages" 
+              <div
+                v-for="(msg, index) in caseForm.messages"
                 :key="index"
                 class="message-item"
               >
@@ -323,13 +323,77 @@
                     <option value="user">user</option>
                     <option value="assistant">assistant</option>
                   </select>
+                  <select
+                    class="message-mode-select"
+                    v-model="msg._mode"
+                    @change="onMsgModeChange(msg)"
+                    title="内容形态"
+                  >
+                    <option value="text">文本</option>
+                    <option value="multipart">多模态</option>
+                  </select>
                   <button class="message-delete-btn" @click="removeMessage(index)" title="删除">×</button>
                 </div>
-                <textarea 
-                  class="form-input message-content" 
-                  v-model="msg.content" 
+
+                <!-- 纯文本模式 -->
+                <textarea
+                  v-if="msg._mode === 'text'"
+                  class="form-input message-content"
+                  v-model="msg.content"
                   placeholder="输入消息内容..."
                 ></textarea>
+
+                <!-- 多模态分块模式 -->
+                <div v-else class="parts-editor">
+                  <div
+                    v-for="(part, pIdx) in msg.content"
+                    :key="pIdx"
+                    class="part-item"
+                  >
+                    <div class="part-header">
+                      <select class="part-type-select" v-model="part.type">
+                        <option value="text">文本</option>
+                        <option value="image_url">图片</option>
+                      </select>
+                      <button class="part-delete-btn" @click="removePart(msg, pIdx)" title="删除分块">×</button>
+                    </div>
+
+                    <textarea
+                      v-if="part.type === 'text'"
+                      class="form-input part-text"
+                      v-model="part.text"
+                      placeholder="输入文本..."
+                    ></textarea>
+
+                    <div v-else class="part-image">
+                      <input
+                        type="text"
+                        class="form-input part-image-url"
+                        v-model="part.image_url.url"
+                        placeholder="图片 URL 或 data:image/...;base64,..."
+                      />
+                      <label class="file-pick-label">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          class="file-pick-input"
+                          @change="onImagePick(part, $event)"
+                        />
+                        <span class="file-pick-btn">📁 选择本地图片</span>
+                      </label>
+                      <img
+                        v-if="part.image_url && part.image_url.url"
+                        :src="part.image_url.url"
+                        class="part-image-preview"
+                        alt="预览"
+                      />
+                    </div>
+                  </div>
+                  <div class="parts-toolbar">
+                    <button class="part-add-btn" @click="addPart(msg, 'text')">+ 文本</button>
+                    <button class="part-add-btn" @click="addPart(msg, 'image_url')">+ 图片</button>
+                  </div>
+                </div>
               </div>
               <button class="add-message-btn" @click="addMessage">+ 添加消息</button>
             </div>
@@ -680,13 +744,38 @@
     <!-- Toast -->
       <div class="toast" :class="{ show: toastVisible, [toastType]: true }">{{ toastMessage }}</div>
 
+    <!-- AI 分析模型选择 Modal -->
+    <div class="modal-overlay" :class="{ show: showAiModelPicker }" @click.self="showAiModelPicker = false">
+      <div class="modal" style="width: 420px;">
+        <div class="modal-title">选择 AI 分析模型</div>
+        <div class="form-group">
+          <label class="form-label">使用哪个模型来生成分析报告？</label>
+          <select class="form-input" v-model="selectedAiModel">
+            <option value="">默认（MiniMax-M2.7 / 环境变量）</option>
+            <option 
+              v-for="model in config?.models || []" 
+              :key="model.name" 
+              :value="model.name"
+            >
+              {{ model.name }}
+            </option>
+          </select>
+          <div class="form-hint">选择已配置的模型进行分析，留空则使用默认配置</div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-secondary" @click="showAiModelPicker = false">取消</button>
+          <button class="btn btn-primary" @click="confirmAiModelAndStart">确认并开始分析</button>
+        </div>
+      </div>
+    </div>
+
     <!-- AI 分析结果 Modal -->
     <div class="ai-analysis-overlay" v-if="showAiAnalysis" @click.self="closeAiAnalysis">
       <div class="ai-analysis-modal">
         <div class="ai-analysis-header">
           <div class="ai-analysis-title">
             <span class="ai-analysis-title-icon">◇</span>
-            <span>MiniMax M2.7 分析报告</span>
+            <span>{{ aiAnalysisTitle }}</span>
           </div>
           <div class="ai-analysis-actions">
             <button class="ai-btn" @click="copyAiReport" :disabled="!aiAnalysisContent" title="复制报告">□ 复制</button>
@@ -697,7 +786,7 @@
         <div class="ai-analysis-body" ref="aiReportContainer">
           <div v-if="aiAnalysisLoading && !aiAnalysisContent" class="ai-loading-state">
             <div class="ai-loading-spinner"></div>
-            <div class="ai-loading-text">正在连接 MiniMax M2.7 进行分析...</div>
+            <div class="ai-loading-text">正在连接 {{ selectedAiModel || '分析模型' }} 进行分析...</div>
           </div>
           <div v-if="aiAnalysisError" class="ai-error-state">
             <div class="ai-error-icon">⚠️</div>
@@ -1019,6 +1108,17 @@ const aiAnalysisError = ref('')
 const aiReportContainer = ref<HTMLElement | null>(null)
 let aiEventSource: EventSource | null = null
 
+// AI 分析模型选择相关
+const showAiModelPicker = ref(false)
+const selectedAiModel = ref('') // 空字符串 = 使用默认兜底
+
+const aiAnalysisTitle = computed(() => {
+  if (selectedAiModel.value) {
+    return `◇ ${selectedAiModel.value} 分析报告`
+  }
+  return '◇ 分析报告'
+})
+
 const renderedAiReport = computed(() => {
   if (!aiAnalysisContent.value) return ''
   return marked.parse(aiAnalysisContent.value) as string
@@ -1030,6 +1130,12 @@ function toggleAiAnalysis() {
     closeAiAnalysis()
     return
   }
+  // 弹出模型选择器
+  showAiModelPicker.value = true
+}
+
+function confirmAiModelAndStart() {
+  showAiModelPicker.value = false
   openAiAnalysis()
 }
 
@@ -1040,7 +1146,12 @@ function openAiAnalysis() {
   aiAnalysisError.value = ''
   
   const baseUrl = window.location.origin
-  const url = `${baseUrl}/api/analysis`
+  let url = `${baseUrl}/api/analysis`
+  
+  // 如果用户选择了模型，追加 model_name 参数
+  if (selectedAiModel.value) {
+    url += `?model_name=${encodeURIComponent(selectedAiModel.value)}`
+  }
   
   aiEventSource = new EventSource(url)
   
@@ -2090,14 +2201,19 @@ function editCaseById(caseId: string) {
   // 填充编辑表单
   currentEditCaseId.value = caseId
   modalType.value = 'case'
+  // 深拷贝 messages 避免污染源数据（source-of-truth in reactive store）
+  const clonedMessages = caseItem.messages && caseItem.messages.length
+    ? JSON.parse(JSON.stringify(caseItem.messages))
+    : [{ role: 'user', content: '' }]
   Object.assign(caseForm, {
     name: caseItem.name,
-    messages: caseItem.messages || [{ role: 'user', content: '' }],
+    messages: clonedMessages,
     max_tokens: caseItem.max_tokens || 500,
     expected_output: caseItem.expected_output || '',
     eval_model: caseItem.eval_model || '',
     folder_id: caseItem.folder_id || null
   })
+  normalizeMessageModes()
   modalVisible.value = true
 }
 
@@ -2154,11 +2270,74 @@ function hideModal() {
 
 // Messages 编辑器函数
 function addMessage() {
-  caseForm.messages.push({ role: 'user', content: '' })
+  caseForm.messages.push({ role: 'user', content: '', _mode: 'text' })
 }
 
 function removeMessage(index: number) {
   caseForm.messages.splice(index, 1)
+}
+
+// 规范化每条 message 的 _mode 字段（hydration）
+function normalizeMessageModes() {
+  for (const m of caseForm.messages) {
+    if (Array.isArray(m.content)) {
+      m._mode = 'multipart'
+    } else if (!m._mode) {
+      m._mode = 'text'
+    }
+  }
+}
+
+// 切换消息内容形态（文本 <-> 多模态）。切回文本时如有图片 part，弹确认避免误丢。
+function onMsgModeChange(msg: any) {
+  if (msg._mode === 'multipart') {
+    const text = typeof msg.content === 'string' ? msg.content : ''
+    msg.content = text ? [{ type: 'text', text }] : []
+  } else {
+    if (Array.isArray(msg.content)) {
+      const hasImage = msg.content.some((p: any) => p.type === 'image_url')
+      if (hasImage) {
+        const ok = confirm('切换为纯文本模式将丢弃所有图片分块。是否继续？')
+        if (!ok) {
+          // 取消切换，恢复 multipart 模式
+          msg._mode = 'multipart'
+          return
+        }
+      }
+      const txt = msg.content
+        .filter((p: any) => p.type === 'text')
+        .map((p: any) => p.text || '')
+        .join('')
+      msg.content = txt
+    }
+  }
+}
+
+function addPart(msg: any, type: 'text' | 'image_url') {
+  if (!Array.isArray(msg.content)) msg.content = []
+  if (type === 'text') {
+    msg.content.push({ type: 'text', text: '' })
+  } else {
+    msg.content.push({ type: 'image_url', image_url: { url: '' } })
+  }
+}
+
+function removePart(msg: any, index: number) {
+  if (Array.isArray(msg.content)) msg.content.splice(index, 1)
+}
+
+function onImagePick(part: any, ev: Event) {
+  const input = ev.target as HTMLInputElement
+  const file = input.files && input.files[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const dataUrl = String(reader.result || '')
+    if (!part.image_url) part.image_url = { url: '' }
+    part.image_url.url = dataUrl
+    input.value = ''
+  }
+  reader.readAsDataURL(file)
 }
 
 async function submitModal() {
@@ -2258,8 +2437,17 @@ async function submitModal() {
       expected_output: caseForm.expected_output,
       eval_model: caseForm.eval_model
     }
-    // 检查是否至少有一条消息有内容
-    const hasContent = caseForm.messages.some((msg: any) => msg.content && msg.content.trim())
+    // 检查是否至少有一条消息有内容（兼容纯文本与多模态分块；多模态至少一个 text 或 image part 有内容）
+    const hasContent = caseForm.messages.some((msg: any) => {
+      if (Array.isArray(msg.content)) {
+        return msg.content.some((p: any) => {
+          if (p.type === 'text') return p.text && p.text.trim()
+          if (p.type === 'image_url') return p.image_url && p.image_url.url && p.image_url.url.trim()
+          return false
+        })
+      }
+      return msg.content && msg.content.trim()
+    })
     if (!data.name || !hasContent) {
       showToast('Please fill all fields', 'error')
       return
@@ -3067,6 +3255,7 @@ function editCase(caseItem: any) {
   } else {
     caseForm.messages = [{ role: 'user', content: '' }]
   }
+  normalizeMessageModes()
       caseForm.max_tokens = caseItem.max_tokens || 500
   caseForm.expected_output = caseItem.expected_output || ''
   caseForm.eval_model = caseItem.eval_model || ''
@@ -3283,6 +3472,13 @@ function handleEvent(event: any) {
         if (data.response) {
           tasks.value[taskId].sub_tasks[subTaskId].output = data.response
           console.log('[complete] response saved, length:', data.response.length)
+        }
+        // 保存多模态输入图片（来自 recorder.record 的 input_images）
+        if (data.input_images && data.input_images.length) {
+          tasks.value[taskId].sub_tasks[subTaskId].input_images = data.input_images
+        }
+        if (data.output_images && data.output_images.length) {
+          tasks.value[taskId].sub_tasks[subTaskId].output_images = data.output_images
         }
         // 保存分离的 think 和 answer 内容
         if (data.think_content) {
@@ -6303,6 +6499,148 @@ onUnmounted(() => {
 
 .message-content {
   min-height: 60px !important;
+}
+
+.message-mode-select {
+  padding: 4px 8px;
+  border: 1px solid var(--gray-300);
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  background: var(--white);
+  color: var(--gray-700);
+  cursor: pointer;
+  margin-left: 6px;
+
+  &:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+}
+
+.parts-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.part-item {
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.part-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.part-type-select {
+  padding: 3px 6px;
+  border: 1px solid var(--gray-300);
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  background: var(--white);
+  color: var(--gray-700);
+  cursor: pointer;
+
+  &:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+}
+
+.part-delete-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 13px;
+  transition: all 0.2s;
+
+  &:hover {
+    background: var(--accent-red);
+    color: white;
+  }
+}
+
+.part-text {
+  min-height: 50px !important;
+}
+
+.part-image {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.part-image-url {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem !important;
+}
+
+.file-pick-label {
+  display: inline-block;
+  cursor: pointer;
+}
+
+.file-pick-input {
+  display: none;
+}
+
+.file-pick-btn {
+  display: inline-block;
+  padding: 5px 10px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-300);
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--gray-700);
+  transition: all 0.2s;
+
+  &:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+}
+
+.part-image-preview {
+  max-width: 100%;
+  max-height: 160px;
+  border-radius: 4px;
+  border: 1px solid var(--gray-200);
+  object-fit: contain;
+}
+
+.parts-toolbar {
+  display: flex;
+  gap: 8px;
+}
+
+.part-add-btn {
+  flex: 1;
+  padding: 6px;
+  background: transparent;
+  border: 1px dashed var(--gray-300);
+  border-radius: 6px;
+  color: var(--gray-500);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
 }
 
 .add-message-btn {

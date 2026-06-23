@@ -133,11 +133,13 @@ class IORecorder:
         evaluation: Optional[Dict[str, Any]] = None,
         round_num: int = None,
         think_content: Optional[str] = None,
-        answer_content: Optional[str] = None
+        answer_content: Optional[str] = None,
+        input_images: Optional[List[Dict[str, Any]]] = None,
+        output_images: Optional[List[Dict[str, Any]]] = None
     ):
         """
         记录单次调用
-        
+
         Args:
             model_name: 模型名称
             prompt: 输入提示
@@ -148,6 +150,8 @@ class IORecorder:
             round_num: 轮次编号（可选，默认使用 current_round）
             think_content: 思考内容（可选，用于分离 think 和 answer）
             answer_content: 回答内容（可选）
+            input_images: 多模态输入图片 part 列表（可选）
+            output_images: 多模态输出图片列表（可选，预留）
         """
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         round_num = round_num or self.current_round or 1
@@ -194,7 +198,9 @@ class IORecorder:
             "metadata": metadata or {},
             "evaluation": evaluation,
             "think_content": think_content,
-            "answer_content": answer_content
+            "answer_content": answer_content,
+            "input_images": input_images or [],
+            "output_images": output_images or [],
         }
         
         # 保存 JSON 文件

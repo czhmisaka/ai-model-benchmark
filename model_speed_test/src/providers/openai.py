@@ -5,6 +5,7 @@ OpenAI 兼容 Provider 实现
 
 import json
 import time
+import ssl
 import logging
 from typing import Dict, Any, List, Optional, AsyncIterator
 import aiohttp
@@ -38,7 +39,11 @@ class OpenAIProvider(BaseLLMProvider):
         """获取或创建 HTTP 会话"""
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=self.config.timeout)
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
         return self._session
 
     def _build_headers(self) -> Dict[str, str]:
@@ -81,10 +86,14 @@ class OpenAIProvider(BaseLLMProvider):
         if self.config.frequency_penalty != 0:
             payload["frequency_penalty"] = self.config.frequency_penalty
 
-        # 添加 thinking 参数（对于支持思考模式的模型）
-        # MiniMax M3 要求 thinking.type 为 "adaptive"，不支持 "enabled"
+        # 添加 thinking 参数（仅对 MiniMax 官网使用）
+        # MiniMax M2/M3 要求 thinking.type 为 "adaptive"
+        # 阿里云百炼 dashscope 接受 "enabled"/"disabled"/"auto"，但 DSv4 等模型自带 reasoning 无需此参数
+        # 火山引擎、硅基流动等兼容端点不支持此参数，会导致 400 错误
         if self.config.thinking_enabled:
-            payload["thinking"] = {"type": "adaptive"}
+            endpoint_lower = self.config.endpoint.lower()
+            if "minimaxi.com" in endpoint_lower:
+                payload["thinking"] = {"type": "adaptive"}
 
         # 合并 extra_params
         if self.config.extra_params:
@@ -100,6 +109,7 @@ class OpenAIProvider(BaseLLMProvider):
         **kwargs
     ) -> LLMResponse:
         """发送聊天请求（非流式）"""
+        self.validate_vision_capability(messages)
         session = await self._get_session()
         payload = self._build_payload(messages, stream=False, **kwargs)
         headers = self._build_headers()
@@ -150,6 +160,7 @@ class OpenAIProvider(BaseLLMProvider):
         **kwargs
     ) -> AsyncIterator[StreamChunk]:
         """发送流式聊天请求"""
+        self.validate_vision_capability(messages)
         session = await self._get_session()
         payload = self._build_payload(messages, stream=True, **kwargs)
         headers = self._build_headers()

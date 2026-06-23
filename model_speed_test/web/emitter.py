@@ -375,18 +375,20 @@ class TestEventEmitter:
         response: str = None,
         evaluation: Dict[str, Any] = None,
         think_content: str = None,
-        answer_content: str = None
+        answer_content: str = None,
+        input_images: list = None,
+        output_images: list = None
     ):
         """发射单次测试完成事件"""
         # 更新任务状态 - 保存完整输出
         task = self._get_or_create_task(model_name, test_case_name, total_rounds)
         round_key = str(current_round)
-        
+
         # 获取当前轮次的输出
         output_text = ""
         if round_key in task["rounds"]:
             output_text = task["rounds"][round_key].get("output", "")
-        
+
         # 更新任务状态（包含校对结果）
         if round_key in task["rounds"]:
             task["rounds"][round_key]["status"] = "done" if success else "error"
@@ -397,6 +399,11 @@ class TestEventEmitter:
             # 保存分离的 think 和 answer 内容
             task["rounds"][round_key]["think_content"] = think_content
             task["rounds"][round_key]["answer_content"] = answer_content
+            # 保存多模态输入/输出图片
+            if input_images:
+                task["rounds"][round_key]["input_images"] = input_images
+            if output_images:
+                task["rounds"][round_key]["output_images"] = output_images
             # 保存校对结果
             if evaluation:
                 task["rounds"][round_key]["evaluation"] = evaluation
@@ -436,6 +443,7 @@ class TestEventEmitter:
                 folder_name = case_folder.get('folder_name')
                 
                 # 不进行任何截断，使用完整输出
+                import json as _json
                 self._db.add_result(
                     group_id=group_id,
                     model_name=model_name,
@@ -448,7 +456,9 @@ class TestEventEmitter:
                     output_text=output_text,
                     evaluation=evaluation,  # 传递校对结果
                     folder_id=folder_id,
-                    folder_name=folder_name
+                    folder_name=folder_name,
+                    input_images_json=_json.dumps(input_images or [], ensure_ascii=False),
+                    output_images_json=_json.dumps(output_images or [], ensure_ascii=False),
                 )
                 print(f"[Emitter] 已保存测试结果: {group_id} - {model_name} - R{current_round}")
                 
@@ -472,7 +482,9 @@ class TestEventEmitter:
                 "think_content": think_content,
                 "answer_content": answer_content,
                 "total_duration_seconds": total_duration,  # 传递任务总耗时
-                "evaluation": evaluation  # 传递校对结果
+                "evaluation": evaluation,  # 传递校对结果
+                "input_images": input_images or [],
+                "output_images": output_images or [],
             }
         ))
         

@@ -5,7 +5,7 @@ LLM Provider 基类和通用数据结构
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, AsyncIterator, Callable
+from typing import List, Dict, Any, Optional, AsyncIterator, Callable, Union
 from datetime import datetime
 from functools import wraps
 import asyncio
@@ -13,6 +13,54 @@ import logging
 import time
 
 logger = logging.getLogger(__name__)
+
+
+# ============ 多模态内容辅助 ============
+
+def normalize_content(content: Union[str, List[Any], None]) -> List[Dict[str, Any]]:
+    """
+    将 Message.content 规范化为 part 列表。
+    - str -> [{"type": "text", "text": s}]
+    - list -> 原样返回（已是 part 列表）
+    - None / 空 -> [{"type": "text", "text": ""}]
+    """
+    if content is None:
+        return [{"type": "text", "text": ""}]
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    if isinstance(content, list):
+        return content
+    return [{"type": "text", "text": str(content)}]
+
+
+def has_image_parts(content: Union[str, List[Any], None]) -> bool:
+    """判断 content 是否包含图片 part"""
+    if isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            ptype = part.get("type")
+            if ptype == "image_url" or ptype == "image":
+                return True
+            # 兼容 Anthropic 风格：{"type": "image", "source": ...}
+            if ptype == "image" and part.get("source"):
+                return True
+    return False
+
+
+def extract_text_for_log(content: Union[str, List[Any], None]) -> str:
+    """
+    从 content 中抽取所有 text part，拼接成单段文本。
+    用于日志 / display_prompt / 兼容旧的字符串日志场景。
+    """
+    parts = normalize_content(content)
+    chunks = []
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        if p.get("type") == "text":
+            chunks.append(p.get("text", ""))
+    return "".join(chunks)
 
 # ============ 重试机制 ============
 
@@ -154,26 +202,63 @@ class LLMResponse:
 
 
 @dataclass
+class ContentPart:
+    """
+    多模态内容块（供应商中立表示）。
+    - text part:   {"type": "text", "text": "..."}
+    - image part:  {"type": "image_url", "image_url": {"url": "..."}}
+                   也接受已构造好的 dict（来自 JSON 反序列化）
+    """
+    type: str                                       # "text" | "image_url"
+    text: Optional[str] = None
+    image_url: Optional[Dict[str, str]] = None      # {"url": "..."}
+
+    def to_dict(self) -> Dict[str, Any]:
+        if self.type == "text":
+            return {"type": "text", "text": self.text or ""}
+        if self.type == "image_url":
+            url = ""
+            if self.image_url:
+                url = self.image_url.get("url", "")
+            return {"type": "image_url", "image_url": {"url": url}}
+        return {"type": self.type}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ContentPart":
+        if not isinstance(data, dict):
+            return cls(type="text", text=str(data))
+        return cls(
+            type=data.get("type", "text"),
+            text=data.get("text"),
+            image_url=data.get("image_url"),
+        )
+
+
+# content 字段既可以是 str（旧格式，向后兼容），也可以是 part 列表（新格式）
+MessageContent = Union[str, List[Union[ContentPart, Dict[str, Any]]], None]
+
+
+@dataclass
 class Message:
     """消息数据结构"""
-    role: str                             # system, user, assistant
-    content: str                           # 消息内容
-    name: Optional[str] = None             # 名称（用于function调用）
-    
+    role: str                                       # system, user, assistant
+    content: MessageContent = ""                    # str 或 ContentPart 列表
+    name: Optional[str] = None                      # 名称（用于function调用）
+
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        result = {"role": self.role, "content": self.content}
+        """转换为字典。content 为 list 时直接透传（供应商中立格式）"""
+        result: Dict[str, Any] = {"role": self.role, "content": self.content}
         if self.name:
             result["name"] = self.name
         return result
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Message':
-        """从字典创建"""
+    def from_dict(cls, data: Dict[str, Any]) -> "Message":
+        """从字典创建。content 原样接收，不做格式转换"""
         return cls(
             role=data.get("role", "user"),
             content=data.get("content", ""),
-            name=data.get("name")
+            name=data.get("name"),
         )
 
 
@@ -229,13 +314,39 @@ class BaseLLMProvider(ABC):
     def __init__(self, config: ModelConfig):
         """
         初始化 Provider
-        
+
         Args:
             config: 模型配置
         """
         self.config = config
         self._session = None  # HTTP会话（子类实现）
-    
+
+    def supports_vision(self) -> bool:
+        """
+        当前模型是否声明支持 vision 输入。
+        优先读 ModelConfig.extra_params["supports_vision"]，缺失则回退到
+        ProviderCapability.supports_vision（向后兼容旧配置）。
+        """
+        ep = getattr(self.config, "extra_params", None) or {}
+        if "supports_vision" in ep:
+            return bool(ep.get("supports_vision"))
+        return bool(getattr(self, "provider_capability", None) and self.provider_capability.supports_vision)
+
+    def validate_vision_capability(self, messages: List["Message"]) -> None:
+        """
+        若 messages 包含图片 part 但模型不支持 vision，抛 ValueError。
+        在每个 provider 的 chat() / stream_chat() 入口调用。
+        """
+        for m in messages or []:
+            if has_image_parts(m.content):
+                if not self.supports_vision():
+                    raise ValueError(
+                        f"模型 {self.config.name} 未启用多模态（vision）输入；"
+                        f"请在模型配置 extra_params 中设置 supports_vision=true"
+                    )
+                # 只要有一个模型声明了 vision 就放行
+                return
+
     @abstractmethod
     async def chat(
         self,

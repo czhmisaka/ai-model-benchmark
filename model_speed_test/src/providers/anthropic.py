@@ -10,6 +10,7 @@ import aiohttp
 import logging
 
 from .base import BaseLLMProvider, LLMResponse, StreamChunk, Message, ModelConfig
+from .base import normalize_content, extract_text_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -57,24 +58,69 @@ class AnthropicProvider(BaseLLMProvider):
     def _convert_messages(self, messages: List[Message]) -> Dict[str, Any]:
         """
         转换消息格式
-        
+
         Anthropic 使用不同的消息格式:
         - system 消息作为单独字段
         - 不支持 function 调用
+        - 多模态：content 是 block 列表；图片支持 url 与 base64 两种 source
         """
         # 分离 system 消息
         system_prompt = ""
         converted_messages = []
-        
+
         for msg in messages:
             if msg.role == "system":
-                system_prompt += msg.content + "\n"
-            else:
-                converted_messages.append({
-                    "role": msg.role,
-                    "content": msg.content
-                })
-        
+                # system 始终是纯文本
+                system_prompt += extract_text_for_log(msg.content) + "\n"
+                continue
+
+            parts = normalize_content(msg.content)
+            blocks: List[Dict[str, Any]] = []
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                ptype = part.get("type")
+                if ptype == "text":
+                    blocks.append({"type": "text", "text": part.get("text", "")})
+                elif ptype in ("image_url", "image"):
+                    url = ""
+                    if ptype == "image_url":
+                        url = (part.get("image_url") or {}).get("url", "")
+                    else:
+                        # 已构造好的 Anthropic 风格 image block
+                        src = part.get("source") or {}
+                        url = src.get("url") or src.get("data") or ""
+                    if url.startswith(("http://", "https://")):
+                        blocks.append({
+                            "type": "image",
+                            "source": {"type": "url", "url": url},
+                        })
+                    elif url.startswith("data:"):
+                        # data:<mime>;base64,<b64>
+                        try:
+                            header, b64 = url.split(",", 1)
+                            mime = header.split(":", 1)[1].split(";", 1)[0]
+                        except Exception:
+                            mime, b64 = "image/png", url
+                        blocks.append({
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": mime, "data": b64},
+                        })
+                    else:
+                        # 兜底当作 base64 处理
+                        blocks.append({
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/png", "data": url},
+                        })
+
+            if not blocks:
+                blocks = [{"type": "text", "text": ""}]
+
+            converted_messages.append({
+                "role": msg.role,
+                "content": blocks,
+            })
+
         return {
             "system": system_prompt.strip() or None,
             "messages": converted_messages
@@ -88,6 +134,7 @@ class AnthropicProvider(BaseLLMProvider):
         """
         发送聊天请求（非流式）
         """
+        self.validate_vision_capability(messages)
         start_time = time.time()
         session = await self._get_session()
         
@@ -167,9 +214,10 @@ class AnthropicProvider(BaseLLMProvider):
     ) -> AsyncIterator[StreamChunk]:
         """
         发送流式聊天请求
-        
+
         Anthropic 的流式响应使用 server-sent events 格式
         """
+        self.validate_vision_capability(messages)
         session = await self._get_session()
         
         try:

@@ -229,7 +229,7 @@ async def get_config():
             
             # 获取模型
             cursor.execute("""
-                SELECT id, name, endpoint, api_key, model, enabled,
+                SELECT id, name, provider, endpoint, api_key, model, enabled,
                        temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled 
                 FROM models
             """)
@@ -238,6 +238,7 @@ async def get_config():
                 models.append({
                     "id": row["id"],
                     "name": row["name"],
+                    "provider": row["provider"] or "custom",
                     "endpoint": row["endpoint"],
                     "api_key": row["api_key"],
                     "model": row["model"],
@@ -386,7 +387,7 @@ async def add_model(model_data: dict):
             
             # 返回更新后的所有模型列表（包含所有参数字段）
             cursor.execute("""
-                SELECT id, name, endpoint, api_key, model, enabled,
+                SELECT id, name, provider, endpoint, api_key, model, enabled,
                        temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled
                 FROM models
             """)
@@ -395,6 +396,7 @@ async def add_model(model_data: dict):
                 models.append({
                     "id": row["id"],
                     "name": row["name"],
+                    "provider": row["provider"] or "custom",
                     "endpoint": row["endpoint"],
                     "api_key": row["api_key"],
                     "model": row["model"],
@@ -500,7 +502,7 @@ async def update_model(model_name: str, model_data: dict):
             
             # 返回更新后的所有模型列表（包含所有参数字段）
             cursor.execute("""
-                SELECT id, name, endpoint, api_key, model, enabled,
+                SELECT id, name, provider, endpoint, api_key, model, enabled,
                        temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled
                 FROM models
             """)
@@ -509,6 +511,7 @@ async def update_model(model_name: str, model_data: dict):
                 models.append({
                     "id": row["id"],
                     "name": row["name"],
+                    "provider": row["provider"] or "custom",
                     "endpoint": row["endpoint"],
                     "api_key": row["api_key"],
                     "model": row["model"],
@@ -554,7 +557,7 @@ async def delete_model(model_name: str):
             
             # 返回更新后的所有模型列表（包含所有参数字段）
             cursor.execute("""
-                SELECT id, name, endpoint, api_key, model, enabled,
+                SELECT id, name, provider, endpoint, api_key, model, enabled,
                        temperature, top_p, max_tokens, presence_penalty, frequency_penalty, thinking_enabled
                 FROM models
             """)
@@ -563,6 +566,7 @@ async def delete_model(model_name: str):
                 models.append({
                     "id": row["id"],
                     "name": row["name"],
+                    "provider": row["provider"] or "custom",
                     "endpoint": row["endpoint"],
                     "api_key": row["api_key"],
                     "model": row["model"],
@@ -706,7 +710,7 @@ async def ping_model(model_name: str):
         
         # 获取模型配置
         cursor.execute("""
-            SELECT name, endpoint, api_key, model, provider 
+            SELECT name, endpoint, api_key, model, provider, temperature, top_p, max_tokens, thinking_enabled
             FROM models WHERE name = ?
         """, (model_name,))
         
@@ -721,7 +725,11 @@ async def ping_model(model_name: str):
             "endpoint": row["endpoint"],
             "api_key": row["api_key"],
             "model": row["model"],
-            "provider": row["provider"]
+            "provider": row["provider"],
+            "temperature": row["temperature"] if row["temperature"] is not None else 0.7,
+            "top_p": row["top_p"] if row["top_p"] is not None else 1.0,
+            "max_tokens": row["max_tokens"] if row["max_tokens"] is not None else 4096,
+            "thinking_enabled": bool(row["thinking_enabled"]) if row["thinking_enabled"] is not None else True
         }
         
         # 验证配置完整性
@@ -744,7 +752,11 @@ async def ping_model(model_name: str):
                 name=model_config["name"],
                 endpoint=model_config["endpoint"],
                 api_key=model_config["api_key"],
-                model=model_config["model"]
+                model=model_config["model"],
+                temperature=model_config.get("temperature", 0.7),
+                top_p=model_config.get("top_p", 1.0),
+                max_tokens=model_config.get("max_tokens", 4096),
+                thinking_enabled=model_config.get("thinking_enabled", True)
             )
             
             # 记录开始时间
@@ -756,6 +768,7 @@ async def ping_model(model_name: str):
                     client.chat(
                         prompt="你好！请回复一句问候语测试连接。",
                         max_tokens=100,
+                        temperature=model_config.get("temperature", 0.7),
                         stream=False
                     ),
                     timeout=30.0  # 30秒超时
@@ -845,11 +858,12 @@ async def add_test_case(test_case_data: dict):
             messages = test_case_data.get("messages", [])
             if messages:
                 messages_json = json.dumps(messages, ensure_ascii=False)
-                # 从最后一条 user 消息提取内容作为 prompt
+                # 从最后一条 user 消息提取文本内容作为 prompt（兼容多模态 list 形态）
+                from src.providers.base import extract_text_for_log
                 prompt = ""
                 for msg in reversed(messages):
                     if msg.get("role") == "user":
-                        prompt = msg.get("content", "")
+                        prompt = extract_text_for_log(msg.get("content", ""))
                         break
             else:
                 messages_json = "[]"
@@ -1522,17 +1536,61 @@ def create_stop_event() -> asyncio.Event:
 @app.get("/api/analysis")
 async def ai_analysis(request: Request):
     """
-    AI 分析端点 — 使用 MiniMax M2.7 流式分析当前页面所有测评任务数据
+    AI 分析端点 — 使用指定模型流式分析当前页面所有测评任务数据
     SSE 流式返回 Markdown 分析报告
     支持参数:
       - group_id: 可选,指定分析哪个测试组的历史数据,不传则使用 emitter 内存中的最新数据
       - use_db: 可选,是否从数据库获取历史数据 (true/false), 默认 false
+      - model_name: 可选,指定用哪个模型来执行分析,不传则使用 MiniMax-M2.7 兜底
     """
     group_id = request.query_params.get("group_id")
     use_db = request.query_params.get("use_db", "false").lower() == "true"
+    model_name = request.query_params.get("model_name", "").strip()
     
     # 先重新加载状态
     test_emitter.reload_state()
+    
+    # --- 查找分析模型的配置 ---
+    import sqlite3
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    
+    ai_model_config = None
+    if model_name:
+        try:
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name, provider, endpoint, api_key, model FROM models WHERE name = ?",
+                (model_name,)
+            )
+            row = cursor.fetchone()
+            if row:
+                ai_model_config = {
+                    "name": row["name"],
+                    "provider": row["provider"] or "openai",
+                    "endpoint": row["endpoint"],
+                    "api_key": row["api_key"],
+                    "model": row["model"]
+                }
+            conn.close()
+        except Exception as e:
+            pass  # 查找失败则回退到默认
+    
+    # 未指定或未找到时使用 MiniMax 兜底
+    use_minimax_fallback = False
+    if not ai_model_config:
+        minimax_key = os.environ.get("MINIMAX_API_KEY", "")
+        if minimax_key:
+            use_minimax_fallback = True
+            model_name = "MiniMax-M2.7"
+            ai_model_config = {
+                "name": "MiniMax-M2.7",
+                "provider": "minimax",
+                "endpoint": "https://api.minimaxi.com/v1/text/chatcompletion_v2",
+                "api_key": minimax_key,
+                "model": "MiniMax-M2.7"
+            }
     
     async def event_generator():
         try:
@@ -1760,18 +1818,29 @@ async def ai_analysis(request: Request):
 
             user_message = f"请分析以下模型速度测评数据:\n\n```json\n{data_json}\n```\n\n请按照要求生成完整的Markdown格式分析报告。"
             
-            yield f"data: {json.dumps({'type': 'status', 'status': 'calling', 'message': '正在调用 MiniMax M2.7 进行分析...'})}\n\n"
-            
-            # Step 3: 调用 MiniMax M2.7 API 流式生成
-            api_key = os.environ.get("MINIMAX_API_KEY", "")
-            if not api_key:
-                yield f"data: {json.dumps({'type': 'error', 'message': '未配置 MINIMAX_API_KEY 环境变量'})}\n\n"
+            if not ai_model_config:
+                yield f"data: {json.dumps({'type': 'error', 'message': '未找到可用的分析模型配置，请确保 MINIMAX_API_KEY 环境变量已设置或选择了一个已配置的模型'})}\n\n"
                 return
             
+            model_display_name = ai_model_config.get("name", "Unknown")
+            yield f"data: {json.dumps({'type': 'status', 'status': 'calling', 'message': f'正在调用 {model_display_name} 进行分析...'})}\n\n"
+            
+            # Step 3: 使用选定的模型进行流式生成（OpenAI 兼容 API）
             import aiohttp
             
+            analysis_endpoint = ai_model_config.get("endpoint", "")
+            analysis_api_key = ai_model_config.get("api_key", "")
+            analysis_model = ai_model_config.get("model", "")
+            
+            if not analysis_api_key:
+                yield f"data: {json.dumps({'type': 'error', 'message': f'模型 {model_display_name} 未配置 API Key'})}\n\n"
+                return
+            if not analysis_endpoint:
+                yield f"data: {json.dumps({'type': 'error', 'message': f'模型 {model_display_name} 未配置 Endpoint'})}\n\n"
+                return
+            
             payload = {
-                "model": "MiniMax-M2.7",
+                "model": analysis_model,
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message}
@@ -1782,7 +1851,7 @@ async def ai_analysis(request: Request):
             }
             
             headers = {
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {analysis_api_key}",
                 "Content-Type": "application/json"
             }
             
@@ -1791,14 +1860,14 @@ async def ai_analysis(request: Request):
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
-                        "https://api.minimaxi.com/v1/text/chatcompletion_v2",
+                        analysis_endpoint,
                         json=payload,
                         headers=headers,
                         timeout=aiohttp.ClientTimeout(total=300)
                     ) as resp:
                         if resp.status != 200:
                             error_text = await resp.text()
-                            yield f"data: {json.dumps({'type': 'error', 'message': f'MiniMax API 返回错误 (HTTP {resp.status}): {error_text[:500]}'})}\n\n"
+                            yield f"data: {json.dumps({'type': 'error', 'message': f'API 返回错误 (HTTP {resp.status}): {error_text[:500]}'})}\n\n"
                             return
                         
                         buffer = ""
@@ -1828,9 +1897,9 @@ async def ai_analysis(request: Request):
                 yield f"data: {json.dumps({'type': 'done', 'full_text': full_text})}\n\n"
                 
             except asyncio.TimeoutError:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'MiniMax API 请求超时 (300秒)'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': 'API 请求超时 (300秒)'})}\n\n"
             except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'message': f'调用 MiniMax API 失败: {str(e)}'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': f'调用 {model_display_name} API 失败: {str(e)}'})}\n\n"
                 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': f'分析过程异常: {str(e)}'})}\n\n"

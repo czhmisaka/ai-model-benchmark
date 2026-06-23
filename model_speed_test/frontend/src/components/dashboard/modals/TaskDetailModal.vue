@@ -84,12 +84,32 @@
               </div>
               <!-- 输入/输出显示 -->
               <div class="detail-round-io" v-if="subTask.status === 'done' || subTask.status === 'running'">
-                <div class="io-section" v-if="subTask.prompt">
+                <div class="io-section" v-if="subTask.prompt || (subTask.input_images && subTask.input_images.length)">
                   <div class="io-label">输入 Prompt:</div>
+                  <!-- 多模态输入图片缩略图 -->
+                  <div v-if="subTask.input_images && subTask.input_images.length" class="io-images">
+                    <img
+                      v-for="(img, iIdx) in subTask.input_images"
+                      :key="iIdx"
+                      :src="(img.image_url && img.image_url.url) || img.url"
+                      class="io-image"
+                      alt="输入图片"
+                    />
+                  </div>
                   <div class="io-content input">{{ subTask.prompt }}</div>
                 </div>
-                <div class="io-section" v-if="subTask.output">
+                <div class="io-section" v-if="subTask.output || (subTask.output_images && subTask.output_images.length)">
                   <div class="io-label">输出预览:</div>
+                  <!-- 输出图片（预留：文生图等场景） -->
+                  <div v-if="subTask.output_images && subTask.output_images.length" class="io-images">
+                    <img
+                      v-for="(img, oIdx) in subTask.output_images"
+                      :key="oIdx"
+                      :src="(img.image_url && img.image_url.url) || img.url"
+                      class="io-image"
+                      alt="输出图片"
+                    />
+                  </div>
                   <div class="io-content output">{{ subTask.output }}</div>
                 </div>
                 <!-- Think 内容显示 -->
@@ -146,6 +166,8 @@ interface SubTask {
   evaluation?: Evaluation
   think_content?: string  // 思考内容
   answer_content?: string  // 回答内容
+  input_images?: any[]     // 多模态输入图片
+  output_images?: any[]    // 多模态输出图片（预留）
 }
 
 interface TaskData {
@@ -423,19 +445,19 @@ function trimText(text: string): string {
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.5;
-  
+
   &.input {
     background: rgba(59, 130, 246, 0.08);
     border: 1px solid rgba(59, 130, 246, 0.2);
     color: var(--gray-700);
   }
-  
+
   &.output {
     background: rgba(34, 197, 94, 0.08);
     border: 1px solid rgba(34, 197, 94, 0.2);
     color: var(--gray-700);
   }
-  
+
   &.think {
     background: rgba(139, 92, 246, 0.08);
     border: 1px solid rgba(139, 92, 246, 0.2);
@@ -545,5 +567,22 @@ function trimText(text: string): string {
   &:hover:not(:disabled) {
     background: var(--gray-50);
   }
+}
+
+/* 多模态图片缩略图 */
+.io-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.io-image {
+  max-width: 240px;
+  max-height: 180px;
+  border-radius: 6px;
+  border: 1px solid var(--gray-200);
+  object-fit: contain;
+  background: var(--gray-50);
 }
 </style>

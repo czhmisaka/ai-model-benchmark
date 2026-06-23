@@ -110,6 +110,18 @@ class TestDatabase:
             cursor.execute("ALTER TABLE test_results ADD COLUMN folder_name TEXT")
         except sqlite3.OperationalError:
             pass
+
+        # 如果 input_images_json 列不存在，则添加（数据库迁移 - 多模态输入图片）
+        try:
+            cursor.execute("ALTER TABLE test_results ADD COLUMN input_images_json TEXT DEFAULT '[]'")
+        except sqlite3.OperationalError:
+            pass
+
+        # 如果 output_images_json 列不存在，则添加（数据库迁移 - 多模态输出图片）
+        try:
+            cursor.execute("ALTER TABLE test_results ADD COLUMN output_images_json TEXT DEFAULT '[]'")
+        except sqlite3.OperationalError:
+            pass
         
         # 创建索引
         cursor.execute("""
@@ -298,11 +310,13 @@ class TestDatabase:
         output_text: str = None,
         evaluation: Dict[str, Any] = None,
         folder_id: str = None,
-        folder_name: str = None
+        folder_name: str = None,
+        input_images_json: str = "[]",
+        output_images_json: str = "[]"
     ) -> int:
         """
         添加测试结果
-        
+
         Args:
             group_id: 测试组ID
             model_name: 模型名称
@@ -317,31 +331,34 @@ class TestDatabase:
             evaluation: 校对结果（可选），包含 is_correct, rate, reason
             folder_id: 所属文件夹ID（可选）
             folder_name: 所属文件夹名称（可选）
-            
+            input_images_json: 输入图片列表 JSON 字符串（多模态用例）
+            output_images_json: 输出图片列表 JSON 字符串（文生图等场景）
+
         Returns:
             记录ID
         """
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         # 截断长文本用于预览
         prompt_preview = (prompt[:200] + "...") if prompt and len(prompt) > 200 else prompt
         response_preview = (response[:500] + "...") if response and len(response) > 500 else response
-        
+
         # 保存完整输出文本
         full_output = output_text if output_text else response
-        
+
         # 保存校对结果（序列化为 JSON）
         evaluation_json = json.dumps(evaluation, ensure_ascii=False) if evaluation else None
-        
+
         cursor.execute("""
             INSERT INTO test_results (
                 group_id, model_name, test_case_name, round_number,
                 ttft_seconds, tpft_seconds, total_time_seconds,
                 input_tokens, output_tokens, tokens_per_second, total_tokens_per_second,
                 success, error_message, prompt_preview, response_preview, output_text, timestamp,
-                evaluation_json, folder_id, folder_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                evaluation_json, folder_id, folder_name,
+                input_images_json, output_images_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             group_id,
             model_name,
@@ -362,13 +379,15 @@ class TestDatabase:
             datetime.now().isoformat(),
             evaluation_json,
             folder_id,
-            folder_name
+            folder_name,
+            input_images_json or "[]",
+            output_images_json or "[]"
         ))
-        
+
         conn.commit()
         row_id = cursor.lastrowid
         conn.close()
-        
+
         return row_id
     
     def get_results(self, group_id: str) -> List[Dict[str, Any]]:

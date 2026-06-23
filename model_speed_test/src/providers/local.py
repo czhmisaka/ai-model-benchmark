@@ -10,6 +10,7 @@ import aiohttp
 import logging
 
 from .base import BaseLLMProvider, LLMResponse, StreamChunk, Message, ModelConfig
+from .base import extract_text_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +58,14 @@ class LMStudioProvider(BaseLLMProvider):
         """
         发送聊天请求（非流式）
         """
+        self.validate_vision_capability(messages)
         start_time = time.time()
         session = await self._get_session()
-        
+
         try:
             max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
             temperature = kwargs.get("temperature", self.config.temperature)
-            
+
             # 构建请求体（OpenAI 兼容格式）
             body = {
                 "messages": [msg.to_dict() for msg in messages],
@@ -135,12 +137,13 @@ class LMStudioProvider(BaseLLMProvider):
         """
         发送流式聊天请求
         """
+        self.validate_vision_capability(messages)
         session = await self._get_session()
-        
+
         try:
             max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
             temperature = kwargs.get("temperature", self.config.temperature)
-            
+
             body = {
                 "messages": [msg.to_dict() for msg in messages],
                 "max_tokens": max_tokens,
@@ -272,17 +275,19 @@ class OllamaProvider(BaseLLMProvider):
     def _convert_messages(self, messages: List[Message]) -> str:
         """
         转换消息格式
-        
-        Ollama 使用简单的文本格式
+
+        Ollama 使用简单的文本格式，不支持多模态。
+        多模态 content 已由 validate_vision_capability() 在 chat/stream_chat 入口拒绝。
         """
         text = ""
         for msg in messages:
+            content_text = extract_text_for_log(msg.content)
             if msg.role == "system":
-                text += f"System: {msg.content}\n"
+                text += f"System: {content_text}\n"
             else:
                 role = "User" if msg.role == "user" else "Assistant"
-                text += f"{role}: {msg.content}\n"
-        
+                text += f"{role}: {content_text}\n"
+
         return text.strip()
     
     async def chat(
@@ -293,13 +298,14 @@ class OllamaProvider(BaseLLMProvider):
         """
         发送聊天请求（非流式）
         """
+        self.validate_vision_capability(messages)
         start_time = time.time()
         session = await self._get_session()
-        
+
         try:
             max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
             temperature = kwargs.get("temperature", self.config.temperature)
-            
+
             # Ollama 特定的请求格式
             body = {
                 "model": self.config.model,
@@ -346,12 +352,13 @@ class OllamaProvider(BaseLLMProvider):
         """
         发送流式聊天请求
         """
+        self.validate_vision_capability(messages)
         session = await self._get_session()
-        
+
         try:
             max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
             temperature = kwargs.get("temperature", self.config.temperature)
-            
+
             body = {
                 "model": self.config.model,
                 "prompt": self._convert_messages(messages),

@@ -164,8 +164,8 @@
         <div class="form-group">
           <label class="form-label">Messages</label>
           <div class="messages-editor">
-            <div 
-              v-for="(msg, index) in caseForm.messages" 
+            <div
+              v-for="(msg, index) in caseForm.messages"
               :key="index"
               class="message-item"
             >
@@ -175,13 +175,77 @@
                   <option value="user">user</option>
                   <option value="assistant">assistant</option>
                 </select>
+                <select
+                  class="message-mode-select"
+                  v-model="msg._mode"
+                  @change="onModeChange(msg)"
+                  title="内容形态"
+                >
+                  <option value="text">文本</option>
+                  <option value="multipart">多模态</option>
+                </select>
                 <button class="message-delete-btn" @click="$emit('remove-message', index)" title="删除">×</button>
               </div>
-              <textarea 
-                class="form-input message-content" 
-                v-model="msg.content" 
+
+              <!-- 纯文本模式 -->
+              <textarea
+                v-if="msg._mode === 'text'"
+                class="form-input message-content"
+                v-model="msg.content"
                 placeholder="输入消息内容..."
               ></textarea>
+
+              <!-- 多模态分块模式 -->
+              <div v-else class="parts-editor">
+                <div
+                  v-for="(part, pIdx) in msg.content"
+                  :key="pIdx"
+                  class="part-item"
+                >
+                  <div class="part-header">
+                    <select class="part-type-select" v-model="part.type">
+                      <option value="text">文本</option>
+                      <option value="image_url">图片</option>
+                    </select>
+                    <button class="part-delete-btn" @click="removePart(msg, pIdx)" title="删除分块">×</button>
+                  </div>
+
+                  <textarea
+                    v-if="part.type === 'text'"
+                    class="form-input part-text"
+                    v-model="part.text"
+                    placeholder="输入文本..."
+                  ></textarea>
+
+                  <div v-else class="part-image">
+                    <input
+                      type="text"
+                      class="form-input part-image-url"
+                      v-model="part.image_url.url"
+                      placeholder="图片 URL 或 data:image/...;base64,..."
+                    />
+                    <label class="file-pick-label">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        class="file-pick-input"
+                        @change="onImagePick(part, $event)"
+                      />
+                      <span class="file-pick-btn">📁 选择本地图片</span>
+                    </label>
+                    <img
+                      v-if="part.image_url && part.image_url.url"
+                      :src="part.image_url.url"
+                      class="part-image-preview"
+                      alt="预览"
+                    />
+                  </div>
+                </div>
+                <div class="parts-toolbar">
+                  <button class="part-add-btn" @click="addPart(msg, 'text')">+ 文本</button>
+                  <button class="part-add-btn" @click="addPart(msg, 'image_url')">+ 图片</button>
+                </div>
+              </div>
             </div>
             <button class="add-message-btn" @click="$emit('add-message')">+ 添加消息</button>
           </div>
@@ -229,9 +293,16 @@
 <script setup lang="ts">
 import { reactive, watch, computed } from 'vue'
 
+interface ContentPart {
+  type: 'text' | 'image_url'
+  text?: string
+  image_url?: { url: string }
+}
+
 interface Message {
   role: string
-  content: string
+  content: string | ContentPart[]
+  _mode?: 'text' | 'multipart'
 }
 
 interface ModelForm {
@@ -284,6 +355,74 @@ const props = withDefaults(defineProps<Props>(), {
   availableModels: () => [],
   folders: () => []
 })
+
+// 规范化每条 message：补 _mode 字段，list content -> multipart
+watch(
+  () => props.caseForm.messages,
+  (msgs) => {
+    if (!msgs) return
+    for (const m of msgs) {
+      if (Array.isArray(m.content)) {
+        m._mode = 'multipart'
+      } else if (!m._mode) {
+        m._mode = 'text'
+      }
+    }
+  },
+  { deep: true, immediate: true }
+)
+
+// 切换内容形态。切回文本时如有图片 part，弹确认避免误丢。
+function onModeChange(msg: Message) {
+  if (msg._mode === 'multipart') {
+    const text = typeof msg.content === 'string' ? msg.content : ''
+    msg.content = text ? [{ type: 'text', text }] : []
+  } else {
+    if (Array.isArray(msg.content)) {
+      const hasImage = msg.content.some((p: ContentPart) => p.type === 'image_url')
+      if (hasImage) {
+        const ok = confirm('切换为纯文本模式将丢弃所有图片分块。是否继续？')
+        if (!ok) {
+          msg._mode = 'multipart'
+          return
+        }
+      }
+      const txt = msg.content
+        .filter((p) => p.type === 'text')
+        .map((p) => p.text || '')
+        .join('')
+      msg.content = txt
+    }
+  }
+}
+
+function addPart(msg: Message, type: 'text' | 'image_url') {
+  if (!Array.isArray(msg.content)) msg.content = []
+  if (type === 'text') {
+    msg.content.push({ type: 'text', text: '' })
+  } else {
+    msg.content.push({ type: 'image_url', image_url: { url: '' } })
+  }
+}
+
+function removePart(msg: Message, index: number) {
+  if (Array.isArray(msg.content)) msg.content.splice(index, 1)
+}
+
+function onImagePick(part: ContentPart, ev: Event) {
+  const input = ev.target as HTMLInputElement
+  const file = input.files && input.files[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const dataUrl = String(reader.result || '')
+    if (!part.image_url) part.image_url = { url: '' }
+    part.image_url.url = dataUrl
+    // 清空 input 以便重复选择同一文件
+    input.value = ''
+  }
+  reader.readAsDataURL(file)
+}
 
 // 扁平化文件夹为下拉选项（排除根目录下的"未分类"）
 function flattenFolders(nodes: TreeNode[], prefix = ''): FolderOption[] {
@@ -541,6 +680,150 @@ defineEmits<{
 
 .message-content {
   min-height: 60px !important;
+}
+
+/* 多模态内容形态选择 */
+.message-mode-select {
+  padding: 4px 8px;
+  border: 1px solid var(--gray-300);
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  background: var(--white);
+  color: var(--gray-700);
+  cursor: pointer;
+  margin-left: 6px;
+
+  &:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+}
+
+/* 多模态分块编辑器 */
+.parts-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.part-item {
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.part-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.part-type-select {
+  padding: 3px 6px;
+  border: 1px solid var(--gray-300);
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  background: var(--white);
+  color: var(--gray-700);
+  cursor: pointer;
+
+  &:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+}
+
+.part-delete-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 13px;
+  transition: all 0.2s;
+
+  &:hover {
+    background: var(--accent-red);
+    color: white;
+  }
+}
+
+.part-text {
+  min-height: 50px !important;
+}
+
+.part-image {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.part-image-url {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem !important;
+}
+
+.file-pick-label {
+  display: inline-block;
+  cursor: pointer;
+}
+
+.file-pick-input {
+  display: none;
+}
+
+.file-pick-btn {
+  display: inline-block;
+  padding: 5px 10px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-300);
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--gray-700);
+  transition: all 0.2s;
+
+  &:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+}
+
+.part-image-preview {
+  max-width: 100%;
+  max-height: 160px;
+  border-radius: 4px;
+  border: 1px solid var(--gray-200);
+  object-fit: contain;
+}
+
+.parts-toolbar {
+  display: flex;
+  gap: 8px;
+}
+
+.part-add-btn {
+  flex: 1;
+  padding: 6px;
+  background: transparent;
+  border: 1px dashed var(--gray-300);
+  border-radius: 6px;
+  color: var(--gray-500);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
 }
 
 .add-message-btn {

@@ -28,6 +28,7 @@ from src.client import ModelClient, StreamChunk
 from src.tester import ModelTester, ConcurrentTester
 from src.recorder import IORecorder
 from src.metrics import MetricsCalculator
+from src.providers.base import has_image_parts
 
 
 def setup_logging(level: str = "INFO"):
@@ -71,6 +72,23 @@ def setup_logging(level: str = "INFO"):
 # Web 模块
 from web.emitter import test_emitter
 from web.app import app as fastapi_app
+
+
+def _collect_input_images_for_event(messages) -> List[Dict[str, Any]]:
+    """从 messages 中抽取所有图片 part（用于 SSE 事件携带 input_images）"""
+    out: List[Dict[str, Any]] = []
+    if not messages:
+        return out
+    for msg in messages:
+        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "image_url" and part.get("image_url"):
+                out.append({"type": "image_url", "image_url": part["image_url"]})
+    return out
 
 
 def load_config(config_path: str = "config/config.json") -> Dict[str, Any]:
@@ -776,10 +794,11 @@ class WebAwareTester:
                 async def stream_with_timeout():
                     nonlocal full_content, think_content_str, answer_content_str, first_token_time, stream_completed
                     try:
+                        model_temperature = getattr(tester.client, 'temperature', tester.test_config.get("temperature", 0.7))
                         async for chunk in tester.client.chat_stream(
                             prompt=None,
                             max_tokens=tester.test_config.get("max_tokens", 500),
-                            temperature=tester.test_config.get("temperature", 0.7),
+                            temperature=model_temperature,
                             messages=messages,
                             system_prompt=system_prompt
                         ):
@@ -999,7 +1018,8 @@ class WebAwareTester:
                         response=full_content,
                         evaluation=evaluation_result,
                         think_content=think_content_str,
-                        answer_content=answer_content_str
+                        answer_content=answer_content_str,
+                        input_images=_collect_input_images_for_event(messages),
                     )
                     
             except Exception as e:
@@ -1341,6 +1361,7 @@ async def run_tests_with_web(
                 endpoint=client_model["endpoint"],
                 api_key=client_model["api_key"],
                 model=client_model["model"],
+                provider=client_model.get("provider", "openai"),
                 temperature=client_model.get("temperature", 0.7),
                 top_p=client_model.get("top_p", 1.0),
                 max_tokens=client_model.get("max_tokens", 4096),

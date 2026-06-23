@@ -10,6 +10,7 @@ import aiohttp
 import logging
 
 from .base import BaseLLMProvider, LLMResponse, StreamChunk, Message, ModelConfig
+from .base import normalize_content, extract_text_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -56,28 +57,68 @@ class GeminiProvider(BaseLLMProvider):
     def _convert_messages(self, messages: List[Message]) -> Dict[str, Any]:
         """
         转换消息格式
-        
+
         Gemini 使用 contents 格式:
-        - parts 包含文本内容
+        - parts 包含文本 / inline_data / file_data
         - system 消息使用 system_instruction
         """
         contents = []
         system_instruction = None
-        
+
+        def _to_gemini_parts(content) -> List[Dict[str, Any]]:
+            parts: List[Dict[str, Any]] = []
+            for part in normalize_content(content):
+                if not isinstance(part, dict):
+                    continue
+                ptype = part.get("type")
+                if ptype == "text":
+                    parts.append({"text": part.get("text", "")})
+                elif ptype in ("image_url", "image"):
+                    url = ""
+                    if ptype == "image_url":
+                        url = (part.get("image_url") or {}).get("url", "")
+                    else:
+                        # Anthropic-style {type:"image", source:{type:"url"|"base64", ...}}
+                        src = part.get("source") or {}
+                        if src.get("type") == "url":
+                            url = src.get("url", "")
+                        elif src.get("type") == "base64":
+                            mime = src.get("media_type", "image/png")
+                            data = src.get("data", "")
+                            parts.append({"inline_data": {"mime_type": mime, "data": data}})
+                            continue
+                    if url.startswith(("http://", "https://")):
+                        parts.append({"file_data": {"file_uri": url}})
+                    elif url.startswith("data:"):
+                        try:
+                            header, b64 = url.split(",", 1)
+                            mime = header.split(":", 1)[1].split(";", 1)[0]
+                        except Exception:
+                            mime, b64 = "image/png", url
+                        parts.append({"inline_data": {"mime_type": mime, "data": b64}})
+                    elif url:
+                        parts.append({"inline_data": {"mime_type": "image/png", "data": url}})
+                    # url 空时静默跳过，避免向 Gemini 发空 inline_data
+            if not parts:
+                parts = [{"text": ""}]
+            return parts
+
         for msg in messages:
             if msg.role == "system":
+                sys_text = extract_text_for_log(msg.content)
                 if not system_instruction:
-                    system_instruction = {"parts": [{"text": msg.content}]}
+                    system_instruction = {"parts": [{"text": sys_text}]}
                 else:
-                    system_instruction["parts"][0]["text"] += "\n" + msg.content
-            else:
-                # Gemini 使用不同的 role 映射
-                gemini_role = "user" if msg.role == "user" else "model"
-                contents.append({
-                    "role": gemini_role,
-                    "parts": [{"text": msg.content}]
-                })
-        
+                    system_instruction["parts"][0]["text"] += "\n" + sys_text
+                continue
+
+            # Gemini 使用不同的 role 映射
+            gemini_role = "user" if msg.role == "user" else "model"
+            contents.append({
+                "role": gemini_role,
+                "parts": _to_gemini_parts(msg.content),
+            })
+
         return {
             "contents": contents,
             "system_instruction": system_instruction
@@ -91,6 +132,7 @@ class GeminiProvider(BaseLLMProvider):
         """
         发送聊天请求（非流式）
         """
+        self.validate_vision_capability(messages)
         start_time = time.time()
         session = await self._get_session()
         
@@ -196,6 +238,7 @@ class GeminiProvider(BaseLLMProvider):
         """
         发送流式聊天请求
         """
+        self.validate_vision_capability(messages)
         session = await self._get_session()
         
         try:

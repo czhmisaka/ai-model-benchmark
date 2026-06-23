@@ -11,6 +11,7 @@ from .client import ModelClient, StreamChunk
 from .metrics import TestMetrics, MetricsCalculator, estimate_input_tokens
 from .recorder import IORecorder
 from .rate_limiter import RateLimiter, ProgressTracker, ConcurrencyConfig
+from .providers.base import extract_text_for_log, has_image_parts, normalize_content
 
 
 @dataclass
@@ -22,6 +23,23 @@ class TestResult:
     error: Optional[str] = None
     response_content: str = ""
     prompt: str = ""
+
+
+def _collect_input_images(messages) -> List[Dict[str, Any]]:
+    """从 messages 中抽取所有图片 part（用于 recorder 记录输入溯源）"""
+    out: List[Dict[str, Any]] = []
+    if not messages:
+        return out
+    for msg in messages:
+        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "image_url" and part.get("image_url"):
+                out.append({"type": "image_url", "image_url": part["image_url"]})
+    return out
 
 
 class ModelTester:
@@ -64,9 +82,16 @@ class ModelTester:
         max_tokens = -1
         temperature = self.test_config.get("temperature", 0.7)
         stream = self.test_config.get("stream", True)
-        
-        # 确定使用的prompt（用于记录）
-        display_prompt = prompt or (messages[-1]["content"] if messages else "")
+
+        # 确定使用的prompt（用于记录）。content 可能是 list（多模态），需抽取文本部分
+        if prompt:
+            display_prompt = prompt
+        elif messages:
+            last = messages[-1]
+            last_content = last.get("content", "") if isinstance(last, dict) else getattr(last, "content", "")
+            display_prompt = extract_text_for_log(last_content)
+        else:
+            display_prompt = ""
         
         # 使用传入的超时参数或默认超时
         timeout = timeout or self.timeout
@@ -117,9 +142,16 @@ class ModelTester:
         start_time = time.perf_counter()
         chunks = []
         full_content = ""
-        
+
         # 确定显示用的prompt
-        display_prompt = prompt or (messages[-1]["content"] if messages else "")
+        if prompt:
+            display_prompt = prompt
+        elif messages:
+            last = messages[-1]
+            last_content = last.get("content", "") if isinstance(last, dict) else getattr(last, "content", "")
+            display_prompt = extract_text_for_log(last_content)
+        else:
+            display_prompt = ""
         
         # 输出详细信息标题
         print(f"\n{'='*60}")
@@ -152,10 +184,22 @@ class ModelTester:
             async for chunk in self.client.chat_stream(
                 prompt=prompt,
                 max_tokens=max_tokens,
-                temperature=temperature,
+                temperature=getattr(self.client, 'temperature', temperature),
                 messages=messages,
                 system_prompt=system_prompt
             ):
+                # 检查 chunk 中的错误
+                chunk_error = getattr(chunk, 'error', None)
+                if chunk_error:
+                    print(f"\n❌ 【流式错误】: {chunk_error}")
+                    return TestResult(
+                        success=False,
+                        model_name=self.client.name,
+                        metrics=None,
+                        error=str(chunk_error),
+                        prompt=display_prompt
+                    )
+                
                 # 构建 chunk 内容（包含 reasoning_content 和 content）
                 chunk_content = chunk.content
                 chunk_reasoning = getattr(chunk, 'reasoning_content', None)
@@ -258,7 +302,10 @@ class ModelTester:
             chunks=chunks,
             input_tokens=input_tokens
         )
-        
+
+        # 收集输入中的图片 part（用于多模态用例溯源）
+        input_images = _collect_input_images(messages)
+
         # 记录结果（包含分离的 think 和 answer 内容）
         # 修复：添加 success 字段到 metadata，确保空输出被正确标记为失败
         self.recorder.record(
@@ -272,7 +319,8 @@ class ModelTester:
                 "success": True  # 流式测试成功（走到这里说明 output_tokens > 0）
             },
             think_content=think_content if think_content else None,
-            answer_content=answer_content if answer_content else None
+            answer_content=answer_content if answer_content else None,
+            input_images=input_images,
         )
         
         # 输出 Output
@@ -319,9 +367,16 @@ class ModelTester:
     ) -> TestResult:
         """执行非流式测试"""
         start_time = time.perf_counter()
-        
+
         # 确定显示用的prompt
-        display_prompt = prompt or (messages[-1]["content"] if messages else "")
+        if prompt:
+            display_prompt = prompt
+        elif messages:
+            last = messages[-1]
+            last_content = last.get("content", "") if isinstance(last, dict) else getattr(last, "content", "")
+            display_prompt = extract_text_for_log(last_content)
+        else:
+            display_prompt = ""
         
         # 输出详细信息标题
         print(f"\n{'='*60}")
@@ -392,6 +447,7 @@ class ModelTester:
         
         # 记录结果
         # 修复：添加 success 字段到 metadata，确保空输出被正确标记为失败
+        input_images = _collect_input_images(messages)
         self.recorder.record(
             model_name=self.client.name,
             prompt=display_prompt,
@@ -401,7 +457,8 @@ class ModelTester:
                 "test_type": "non-stream",
                 "messages_count": len(messages) if messages else 0,
                 "success": True  # 非流式测试成功（走到这里说明 output_tokens > 0）
-            }
+            },
+            input_images=input_images,
         )
         
         # 输出 Output
