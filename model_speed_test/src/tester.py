@@ -308,7 +308,7 @@ class ModelTester:
 
         # 记录结果（包含分离的 think 和 answer 内容）
         # 修复：添加 success 字段到 metadata，确保空输出被正确标记为失败
-        self.recorder.record(
+        await self.recorder.record(
             model_name=self.client.name,
             prompt=display_prompt,
             response=full_content,
@@ -448,7 +448,7 @@ class ModelTester:
         # 记录结果
         # 修复：添加 success 字段到 metadata，确保空输出被正确标记为失败
         input_images = _collect_input_images(messages)
-        self.recorder.record(
+        await self.recorder.record(
             model_name=self.client.name,
             prompt=display_prompt,
             response=content,

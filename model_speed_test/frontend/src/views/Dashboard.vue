@@ -277,6 +277,13 @@
           </div>
           <div class="form-group form-group-inline">
             <label class="form-checkbox-label">
+              <input type="checkbox" v-model="modelForm.thinking_enabled" />
+              <span>启用思考模式</span>
+            </label>
+            <span class="form-hint">开启后模型会在回答前进行深度思考（支持 thinking 扩展的模型生效）</span>
+          </div>
+          <div class="form-group form-group-inline">
+            <label class="form-checkbox-label">
               <input type="checkbox" v-model="modelForm.supports_vision" />
               <span>支持多模态（图片输入）</span>
             </label>
@@ -1584,6 +1591,31 @@ onUnmounted(() => {
   if (timer) {
     clearInterval(timer)
   }
+  // 清理所有 document 级事件监听器（防止拖拽/缩放进行中组件卸载时泄漏）
+  document.removeEventListener('mousemove', onDrag)
+  document.removeEventListener('mouseup', stopDrag)
+  document.removeEventListener('mousemove', onLogPanelDrag)
+  document.removeEventListener('mouseup', stopLogPanelDrag)
+  document.removeEventListener('mousemove', onLogResize)
+  document.removeEventListener('mouseup', stopLogResize)
+  document.removeEventListener('mousemove', onLogResizeTop)
+  document.removeEventListener('mouseup', stopLogResizeTop)
+  document.removeEventListener('mousemove', onLogResizeBottom)
+  document.removeEventListener('mouseup', stopLogResizeBottom)
+  document.removeEventListener('mousemove', onLogResizeLeft)
+  document.removeEventListener('mouseup', stopLogResizeLeft)
+  document.removeEventListener('mousemove', onLogResizeRight)
+  document.removeEventListener('mouseup', stopLogResizeRight)
+  document.removeEventListener('mousemove', onLogResizeTopLeft)
+  document.removeEventListener('mouseup', stopLogResizeTopLeft)
+  document.removeEventListener('mousemove', onLogResizeTopRight)
+  document.removeEventListener('mouseup', stopLogResizeTopRight)
+  document.removeEventListener('mousemove', onLogResizeBottomLeft)
+  document.removeEventListener('mouseup', stopLogResizeBottomLeft)
+  document.removeEventListener('mousemove', onCardDrag)
+  document.removeEventListener('mouseup', stopCardDrag)
+  document.removeEventListener('mousemove', onCardResize)
+  document.removeEventListener('mouseup', stopCardResize)
 })
 
 // 计算任务的显示耗时
@@ -2353,7 +2385,7 @@ function showModal(type: 'model' | 'case') {
 function hideModal() {
   modalVisible.value = false
   // 重置表单
-  Object.assign(modelForm, { name: '', endpoint: '', api_key: '', model: '', supports_vision: false })
+  Object.assign(modelForm, { name: '', endpoint: '', api_key: '', model: '', thinking_enabled: true, supports_vision: false })
   Object.assign(caseForm, { name: '', messages: [{ role: 'user', content: '' }], max_tokens: 500, expected_output: '', eval_model: '', folder_id: null })
   // 重置编辑状态
   currentEditCaseId.value = null
@@ -2441,6 +2473,7 @@ async function submitModal() {
       api_key: modelForm.api_key,
       model: modelForm.model,
       enabled: true,
+      thinking_enabled: modelForm.thinking_enabled,
       extra_params: { supports_vision: !!modelForm.supports_vision }
     }
     // 使用旧名称作为 URL 参数进行更新
@@ -2503,6 +2536,7 @@ async function submitModal() {
       api_key: modelForm.api_key,
       model: modelForm.model,
       enabled: true,
+      thinking_enabled: modelForm.thinking_enabled,
       extra_params: { supports_vision: !!modelForm.supports_vision }
     }
     if (!data.name || !data.endpoint || !data.model) {

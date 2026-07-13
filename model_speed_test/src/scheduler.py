@@ -358,24 +358,35 @@ class TestScheduler:
         return result
     
     async def _run_scheduler(self, check_interval: int = 60):
-        """调度器循环"""
+        """调度器循环（带重叠检测，避免长任务重复触发）"""
         while self._running:
             now = datetime.now()
-            
-            for task in self._tasks.values():
+            # 复制任务列表，避免遍历中修改
+            tasks_snapshot = list(self._tasks.values())
+
+            for task in tasks_snapshot:
                 if not task.enabled:
                     continue
-                
                 if not task.next_run:
                     continue
-                
+
                 next_run = datetime.fromisoformat(task.next_run)
-                
-                if now >= next_run:
+
+                # 重叠检测：只在非运行状态时触发
+                if now >= next_run and task.status != "running":
                     print(f"[Scheduler] 执行任务: {task.name}")
-                    await self.execute_task(task.id)
-            
+                    task.status = "running"
+                    asyncio.create_task(self._execute_with_cleanup(task.id))
+
             await asyncio.sleep(check_interval)
+
+    async def _execute_with_cleanup(self, task_id: str):
+        """执行任务并在结束时清理状态（确保异常路径也恢复状态）"""
+        try:
+            await self.execute_task(task_id)
+        finally:
+            if task_id in self._tasks:
+                self._tasks[task_id].status = "idle"
     
     async def start(self, check_interval: int = 60):
         """启动调度器"""

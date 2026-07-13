@@ -453,10 +453,10 @@ async def run_tests(
                     print(f"    错误: {result['error']}")
     
     # 完成记录
-    recorder.finalize()
+    await recorder.finalize()
     
     # 导出CSV
-    csv_path = recorder.export_csv()
+    csv_path = await recorder.export_csv()
     if csv_path:
         print(f"\nCSV记录已保存到: {csv_path}")
 
@@ -940,7 +940,7 @@ class WebAwareTester:
                     
                     # 记录到 recorder
                     if hasattr(tester, 'recorder') and tester.recorder:
-                        tester.recorder.record(
+                        await tester.recorder.record(
                             model_name=model_name,
                             prompt=display_prompt,
                             response=full_content or "No output",
@@ -961,7 +961,7 @@ class WebAwareTester:
                 
                 # 保存到记录器（修复：添加 recorder 调用以保存输出内容到文件）
                 if hasattr(tester, 'recorder') and tester.recorder:
-                    tester.recorder.record(
+                    await tester.recorder.record(
                         model_name=model_name,
                         prompt=display_prompt,
                         response=full_content,
@@ -1066,7 +1066,7 @@ class WebAwareTester:
                         "tokens_per_second": 0,
                         "error": error_msg
                     }
-                    tester.recorder.record(
+                    await tester.recorder.record(
                         model_name=model_name,
                         prompt=display_prompt,
                         response=f"Error: {error_msg}",
@@ -1205,7 +1205,7 @@ async def run_concurrent_tests(
     print(f"{'='*60}")
     
     # 完成记录
-    recorder.finalize()
+    await recorder.finalize()
 
 
 async def run_tests_with_web(
@@ -1462,7 +1462,7 @@ async def run_tests_with_web(
     print(f"\n汇总结果已保存到: {summary_file}")
     
     # 完成记录
-    recorder.finalize()
+    await recorder.finalize()
 
 
 def start_web_server(port: int = 15010):

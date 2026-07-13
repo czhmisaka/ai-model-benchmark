@@ -8,9 +8,17 @@ import json
 import time
 import hashlib
 import uuid
+import asyncio
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from pathlib import Path
+
+from .async_io import (
+    read_json,
+    write_json,
+    write_text,
+    atomic_write_json,
+)
 
 
 def generate_hashid(length: int = 8) -> str:
@@ -32,7 +40,7 @@ def sanitize_filename(name: str) -> str:
 
 class IORecorder:
     """输入输出记录器 - 支持按轮次拆分和任务文件夹归档"""
-    
+
     def __init__(
         self,
         results_dir: str = "results",
@@ -72,15 +80,31 @@ class IORecorder:
         # manifest.json 路径
         self.manifest_file = self.task_dir / "manifest.json"
         
-        # 初始化 manifest
-        self._init_manifest(config)
-        
         # 记录计数器
         self.record_count = 0
         self.current_round = 0
-    
-    def _init_manifest(self, config: Dict[str, Any] = None):
-        """初始化 manifest.json"""
+
+        # manifest 写入锁（防止并发竞态）
+        self._manifest_lock = asyncio.Lock()
+
+        # 同步初始化 manifest.json（构造时调用一次，非热路径）
+        self._init_manifest_sync(config)
+
+    def _init_manifest_sync(self, config: Dict[str, Any] = None):
+        """同步初始化 manifest.json（仅在 __init__ 中调用）"""
+        manifest = {
+            "group_id": self.group_id,
+            "task_name": self.task_name,
+            "created_at": datetime.now().isoformat(),
+            "total_rounds": self.total_rounds,
+            "config": config,
+            "files": {}
+        }
+        with open(self.manifest_file, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    async def init_manifest(self, config: Dict[str, Any] = None):
+        """异步初始化 manifest.json"""
         manifest = {
             "group_id": self.group_id,
             "task_name": self.task_name,
@@ -89,28 +113,24 @@ class IORecorder:
             "config": config,
             "files": {}  # round_N: [file_list]
         }
-        
-        with open(self.manifest_file, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
-    
-    def _update_manifest(self, round_num: int, filename: str):
-        """更新 manifest.json"""
-        try:
-            with open(self.manifest_file, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            manifest = {"files": {}}
-        
-        round_key = f"round_{round_num}"
-        if round_key not in manifest.get("files", {}):
-            manifest["files"][round_key] = []
-        
-        if filename not in manifest["files"][round_key]:
-            manifest["files"][round_key].append(filename)
-        
-        with open(self.manifest_file, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
-    
+        await write_json(str(self.manifest_file), manifest)
+
+    async def _update_manifest(self, round_num: int, filename: str):
+        """异步更新 manifest.json（带锁保护，防止并发竞态）"""
+        async with self._manifest_lock:
+            manifest = await read_json(str(self.manifest_file))
+            if manifest is None:
+                manifest = {"files": {}}
+
+            round_key = f"round_{round_num}"
+            if round_key not in manifest.get("files", {}):
+                manifest["files"][round_key] = []
+
+            if filename not in manifest["files"][round_key]:
+                manifest["files"][round_key].append(filename)
+
+            await atomic_write_json(str(self.manifest_file), manifest)
+
     def _get_round_dir(self, round_num: int) -> Path:
         """获取或创建轮次目录"""
         if round_num not in self.round_dirs:
@@ -118,12 +138,12 @@ class IORecorder:
             round_dir.mkdir(parents=True, exist_ok=True)
             self.round_dirs[round_num] = round_dir
         return self.round_dirs[round_num]
-    
+
     def set_current_round(self, round_num: int):
         """设置当前轮次"""
         self.current_round = round_num
-    
-    def record(
+
+    async def record(
         self,
         model_name: str,
         prompt: str,
@@ -171,12 +191,9 @@ class IORecorder:
         file_path = round_dir / filename
         
         # 构建记录数据
-        # 修复：增加 output_tokens 检查，如果 output_tokens 为 0 也标记为失败
         output_tokens = metrics.get("output_tokens", 0) if metrics else 0
         
-        # 综合判断 success：
-        # 1. 优先使用 metadata 中的 success 字段
-        # 2. 如果 metadata.success 为 True 但 output_tokens 为 0，仍然标记为失败
+        # 综合判断 success
         if metadata:
             base_success = metadata.get("success", True)
         else:
@@ -191,7 +208,7 @@ class IORecorder:
             "group_id": self.group_id,
             "round": round_num,
             "model_name": model_name,
-            "success": final_success,  # 使用修正后的 success 标志
+            "success": final_success,
             "metrics": metrics,
             "prompt": prompt,
             "response": response,
@@ -203,143 +220,149 @@ class IORecorder:
             "output_images": output_images or [],
         }
         
-        # 保存 JSON 文件
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(record_data, f, ensure_ascii=False, indent=2)
+        # 异步保存 JSON 文件
+        await write_json(str(file_path), record_data)
         
-        # 更新 manifest
-        self._update_manifest(round_num, filename)
+        # 异步更新 manifest
+        await self._update_manifest(round_num, filename)
         
-        # 生成 Markdown 人类可读文件（追加到 all_rounds.md）
-        self._append_markdown(record_data)
-    
-    def _append_markdown(self, record: Dict[str, Any]):
-        """追加记录到 all_rounds.md"""
+        # 异步追加 Markdown
+        await self._append_markdown(record_data)
+
+    async def _append_markdown(self, record: Dict[str, Any]):
+        """异步追加记录到 all_rounds.md"""
         md_file = self.task_dir / "all_rounds.md"
+        lines = []
+        lines.append(f"## 测试记录 - {record['timestamp']}\n")
+        lines.append(f"**模型**: {record['model_name']}\n")
+        lines.append(f"**轮次**: {record['round']}\n")
+        lines.append(f"**记录ID**: {record['id']}\n\n")
         
-        with open(md_file, "a", encoding="utf-8") as f:
-            f.write(f"## 测试记录 - {record['timestamp']}\n\n")
-            f.write(f"**模型**: {record['model_name']}\n")
-            f.write(f"**轮次**: {record['round']}\n")
-            f.write(f"**记录ID**: {record['id']}\n\n")
+        # 性能指标
+        lines.append(f"### 性能指标\n\n")
+        lines.append(f"| 指标 | 值 |\n")
+        lines.append(f"|------|-----|\n")
+        
+        metrics = record.get("metrics", {})
+        lines.append(f"| 首Token时间(TTFT) | {metrics.get('ttft_seconds', 0):.3f}s |\n")
+        lines.append(f"| 生成时间(TPFT) | {metrics.get('tpft_seconds', 0):.3f}s |\n")
+        lines.append(f"| 总耗时 | {metrics.get('total_time_seconds', 0):.3f}s |\n")
+        lines.append(f"| 输入Token数 | {metrics.get('input_tokens', 0)} |\n")
+        lines.append(f"| 输出Token数 | {metrics.get('output_tokens', 0)} |\n")
+        lines.append(f"| 输出速度 | {metrics.get('tokens_per_second', 0):.2f} tokens/s |\n")
+        
+        # Think/Answer 指标
+        if metrics.get('think_time_seconds', 0) > 0:
+            lines.append(f"| Think时间 | {metrics.get('think_time_seconds', 0):.3f}s |\n")
+            lines.append(f"| Think Tokens | {metrics.get('think_tokens', 0)} |\n")
+        if metrics.get('answer_time_seconds', 0) > 0:
+            lines.append(f"| Answer时间 | {metrics.get('answer_time_seconds', 0):.3f}s |\n")
+            lines.append(f"| Answer Tokens | {metrics.get('answer_tokens', 0)} |\n")
+        
+        lines.append(f"\n")
+        
+        # 输入提示
+        lines.append(f"### 输入提示\n\n")
+        lines.append(f"```\n")
+        lines.append(f"{record.get('prompt', '')[:500]}\n")
+        if len(record.get('prompt', '')) > 500:
+            lines.append(f"... [内容过长，已截断]\n")
+        lines.append(f"```\n\n")
+        
+        # Think 内容（如果存在）
+        think_content = record.get('think_content')
+        if think_content:
+            lines.append(f"### 💭 思考内容 (Think)\n\n")
+            lines.append(f"```\n")
+            lines.append(f"{think_content[:1500]}\n")
+            if len(think_content) > 1500:
+                lines.append(f"... [内容过长，已截断]\n")
+            lines.append(f"```\n\n")
+        
+        # Answer 内容（如果存在）
+        answer_content = record.get('answer_content')
+        if answer_content:
+            lines.append(f"### 💬 回答内容 (Answer)\n\n")
+            lines.append(f"```\n")
+            lines.append(f"{answer_content[:1500]}\n")
+            if len(answer_content) > 1500:
+                lines.append(f"... [内容过长，已截断]\n")
+            lines.append(f"```\n\n")
+        
+        # 完整模型响应
+        lines.append(f"### 📋 完整模型响应\n\n")
+        lines.append(f"```\n")
+        lines.append(f"{record.get('response', '')[:1000]}\n")
+        if len(record.get('response', '')) > 1000:
+            lines.append(f"... [内容过长，已截断]\n")
+        lines.append(f"```\n\n")
+        
+        # 评估结果
+        evaluation = record.get("evaluation")
+        if evaluation:
+            lines.append(f"### 评估结果\n\n")
+            lines.append(f"| 指标 | 值 |\n")
+            lines.append(f"|------|-----|\n")
+            lines.append(f"| 综合评分 | {evaluation.get('result', 0)}/{evaluation.get('max', 100)} |\n")
+            lines.append(f"| 通过 | {'✅ 是' if evaluation.get('success') else '❌ 否'} |\n")
             
-            # 性能指标
-            f.write(f"### 性能指标\n\n")
-            f.write(f"| 指标 | 值 |\n")
-            f.write(f"|------|-----|\n")
+            if evaluation.get('is_correct') is not None:
+                lines.append(f"| 正确性 | {'✅ 是' if evaluation.get('is_correct') else '❌ 否'} |\n")
+            if evaluation.get('rate') is not None:
+                lines.append(f"| 评分 | {evaluation.get('rate')}/10 |\n")
             
-            metrics = record.get("metrics", {})
-            f.write(f"| 首Token时间(TTFT) | {metrics.get('ttft_seconds', 0):.3f}s |\n")
-            f.write(f"| 生成时间(TPFT) | {metrics.get('tpft_seconds', 0):.3f}s |\n")
-            f.write(f"| 总耗时 | {metrics.get('total_time_seconds', 0):.3f}s |\n")
-            f.write(f"| 输入Token数 | {metrics.get('input_tokens', 0)} |\n")
-            f.write(f"| 输出Token数 | {metrics.get('output_tokens', 0)} |\n")
-            f.write(f"| 输出速度 | {metrics.get('tokens_per_second', 0):.2f} tokens/s |\n")
+            if evaluation.get('reason'):
+                lines.append(f"\n**评价**: {evaluation.get('reason')}\n")
             
-            # Think/Answer 指标
-            if metrics.get('think_time_seconds', 0) > 0:
-                f.write(f"| Think时间 | {metrics.get('think_time_seconds', 0):.3f}s |\n")
-                f.write(f"| Think Tokens | {metrics.get('think_tokens', 0)} |\n")
-            if metrics.get('answer_time_seconds', 0) > 0:
-                f.write(f"| Answer时间 | {metrics.get('answer_time_seconds', 0):.3f}s |\n")
-                f.write(f"| Answer Tokens | {metrics.get('answer_tokens', 0)} |\n")
-            
-            f.write(f"\n")
-            
-            # 输入提示
-            f.write(f"### 输入提示\n\n")
-            f.write(f"```\n")
-            f.write(f"{record.get('prompt', '')[:500]}\n")
-            if len(record.get('prompt', '')) > 500:
-                f.write(f"... [内容过长，已截断]\n")
-            f.write(f"```\n\n")
-            
-            # Think 内容（如果存在）
-            think_content = record.get('think_content')
-            if think_content:
-                f.write(f"### 💭 思考内容 (Think)\n\n")
-                f.write(f"```\n")
-                f.write(f"{think_content[:1500]}\n")
-                if len(think_content) > 1500:
-                    f.write(f"... [内容过长，已截断]\n")
-                f.write(f"```\n\n")
-            
-            # Answer 内容（如果存在）
-            answer_content = record.get('answer_content')
-            if answer_content:
-                f.write(f"### 💬 回答内容 (Answer)\n\n")
-                f.write(f"```\n")
-                f.write(f"{answer_content[:1500]}\n")
-                if len(answer_content) > 1500:
-                    f.write(f"... [内容过长，已截断]\n")
-                f.write(f"```\n\n")
-            
-            # 完整模型响应（原始内容）
-            f.write(f"### 📋 完整模型响应\n\n")
-            f.write(f"```\n")
-            f.write(f"{record.get('response', '')[:1000]}\n")
-            if len(record.get('response', '')) > 1000:
-                f.write(f"... [内容过长，已截断]\n")
-            f.write(f"```\n\n")
-            
-            # 评估结果
-            evaluation = record.get("evaluation")
-            if evaluation:
-                f.write(f"### 评估结果\n\n")
-                f.write(f"| 指标 | 值 |\n")
-                f.write(f"|------|-----|\n")
-                f.write(f"| 综合评分 | {evaluation.get('result', 0)}/{evaluation.get('max', 100)} |\n")
-                f.write(f"| 通过 | {'✅ 是' if evaluation.get('success') else '❌ 否'} |\n")
-                
-                if evaluation.get('is_correct') is not None:
-                    f.write(f"| 正确性 | {'✅ 是' if evaluation.get('is_correct') else '❌ 否'} |\n")
-                if evaluation.get('rate') is not None:
-                    f.write(f"| 评分 | {evaluation.get('rate')}/10 |\n")
-                
-                if evaluation.get('reason'):
-                    f.write(f"\n**评价**: {evaluation.get('reason')}\n")
-                
-                f.write(f"\n")
-            
-            # 错误信息
-            if not record.get("success", True):
-                f.write(f"### 错误信息\n\n")
-                error = record.get("metrics", {}).get("error", "Unknown error")
-                f.write(f"```\n{error}\n```\n\n")
-            
-            f.write(f"---\n\n")
-    
-    def init_markdown_file(self):
-        """初始化 all_rounds.md 文件头"""
+            lines.append(f"\n")
+        
+        # 错误信息
+        if not record.get("success", True):
+            lines.append(f"### 错误信息\n\n")
+            error = record.get("metrics", {}).get("error", "Unknown error")
+            lines.append(f"```\n{error}\n```\n\n")
+        
+        lines.append(f"---\n\n")
+
+        # 追加写入 Markdown 文件（使用 append 模式）
+        content = "".join(lines)
+        import aiofiles
+        async with aiofiles.open(str(md_file), "a", encoding="utf-8") as f:
+            await f.write(content)
+
+    async def init_markdown_file(self):
+        """异步初始化 all_rounds.md 文件头"""
         md_file = self.task_dir / "all_rounds.md"
         
         # 如果文件已存在，不重复写入头部
         if md_file.exists():
             return
         
-        with open(md_file, "w", encoding="utf-8") as f:
-            f.write(f"# AI模型测试记录\n\n")
-            f.write(f"- 测试组ID: {self.group_id}\n")
-            f.write(f"- 任务名称: {self.task_name}\n")
-            f.write(f"- 测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"- 总轮次: {self.total_rounds or '未指定'}\n\n")
-            f.write("---\n\n")
-    
-    def finalize(self, summary: Dict[str, Any] = None):
+        lines = [
+            f"# AI模型测试记录\n\n",
+            f"- 测试组ID: {self.group_id}\n",
+            f"- 任务名称: {self.task_name}\n",
+            f"- 测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+            f"- 总轮次: {self.total_rounds or '未指定'}\n\n",
+            "---\n\n",
+        ]
+        await write_text(str(md_file), "".join(lines))
+
+    async def finalize(self, summary: Dict[str, Any] = None):
         """
-        完成记录，生成 summary.json
+        完成记录，生成 summary.json（异步版本）
         
         Args:
             summary: 汇总数据（可选）
         """
         # 初始化 Markdown 文件头（如果还没有）
-        self.init_markdown_file()
+        await self.init_markdown_file()
         
         # 生成 summary.json
         summary_file = self.task_dir / "summary.json"
         
         # 收集所有记录生成统计
-        all_stats = self._collect_stats()
+        all_stats = await self._collect_stats()
         
         final_summary = {
             "group_id": self.group_id,
@@ -350,26 +373,23 @@ class IORecorder:
             "custom_summary": summary
         }
         
-        with open(summary_file, "w", encoding="utf-8") as f:
-            json.dump(final_summary, f, ensure_ascii=False, indent=2)
+        await write_json(str(summary_file), final_summary)
         
-        # 更新 manifest.json 状态
-        try:
-            with open(self.manifest_file, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-        except:
-            manifest = {}
-        
-        manifest["status"] = "completed"
-        manifest["completed_at"] = datetime.now().isoformat()
-        manifest["total_records"] = self.record_count
-        manifest["summary_file"] = str(summary_file.name)
-        
-        with open(self.manifest_file, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
-    
-    def _collect_stats(self) -> Dict[str, Any]:
-        """收集所有记录的统计信息"""
+        # 异步更新 manifest.json 状态
+        async with self._manifest_lock:
+            manifest = await read_json(str(self.manifest_file))
+            if manifest is None:
+                manifest = {}
+
+            manifest["status"] = "completed"
+            manifest["completed_at"] = datetime.now().isoformat()
+            manifest["total_records"] = self.record_count
+            manifest["summary_file"] = str(summary_file.name)
+
+            await atomic_write_json(str(self.manifest_file), manifest)
+
+    async def _collect_stats(self) -> Dict[str, Any]:
+        """异步收集所有记录的统计信息"""
         stats = {
             "total": 0,
             "success": 0,
@@ -392,49 +412,46 @@ class IORecorder:
             }
             
             for json_file in round_dir.glob("*.json"):
-                try:
-                    with open(json_file, "r", encoding="utf-8") as f:
-                        record = json.load(f)
-                    
-                    stats["total"] += 1
-                    round_stats["total"] += 1
-                    
-                    if record.get("success", True):
-                        stats["success"] += 1
-                        round_stats["success"] += 1
-                    else:
-                        stats["failed"] += 1
-                        round_stats["failed"] += 1
-                    
-                    # 按模型统计
-                    model_name = record.get("model_name", "unknown")
-                    if model_name not in stats["by_model"]:
-                        stats["by_model"][model_name] = {"total": 0, "success": 0, "failed": 0}
-                    stats["by_model"][model_name]["total"] += 1
-                    if record.get("success", True):
-                        stats["by_model"][model_name]["success"] += 1
-                    else:
-                        stats["by_model"][model_name]["failed"] += 1
-                    
-                    # 按模型统计（轮次内）
-                    if model_name not in round_stats["models"]:
-                        round_stats["models"][model_name] = {"total": 0, "success": 0}
-                    round_stats["models"][model_name]["total"] += 1
-                    if record.get("success", True):
-                        round_stats["models"][model_name]["success"] += 1
-                
-                except (json.JSONDecodeError, IOError):
+                record = await read_json(str(json_file))
+                if record is None:
                     continue
+                
+                stats["total"] += 1
+                round_stats["total"] += 1
+                
+                if record.get("success", True):
+                    stats["success"] += 1
+                    round_stats["success"] += 1
+                else:
+                    stats["failed"] += 1
+                    round_stats["failed"] += 1
+                
+                # 按模型统计
+                model_name = record.get("model_name", "unknown")
+                if model_name not in stats["by_model"]:
+                    stats["by_model"][model_name] = {"total": 0, "success": 0, "failed": 0}
+                stats["by_model"][model_name]["total"] += 1
+                if record.get("success", True):
+                    stats["by_model"][model_name]["success"] += 1
+                else:
+                    stats["by_model"][model_name]["failed"] += 1
+                
+                # 按模型统计（轮次内）
+                if model_name not in round_stats["models"]:
+                    round_stats["models"][model_name] = {"total": 0, "success": 0}
+                round_stats["models"][model_name]["total"] += 1
+                if record.get("success", True):
+                    round_stats["models"][model_name]["success"] += 1
             
             stats["by_round"][f"round_{round_num}"] = round_stats
         
         return stats
-    
+
     # ===== 兼容旧接口的方法 =====
-    
-    def get_records(self, model_name: Optional[str] = None) -> List[Dict[str, Any]]:
+
+    async def get_records(self, model_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        读取已保存的记录（兼容旧接口）
+        异步读取已保存的记录（兼容旧接口）
         
         Args:
             model_name: 可选的模型名称过滤
@@ -450,29 +467,27 @@ class IORecorder:
                 continue
             
             for json_file in round_dir.glob("*.json"):
-                try:
-                    with open(json_file, "r", encoding="utf-8") as f:
-                        record = json.load(f)
-                    
-                    if model_name is None or record.get("model_name") == model_name:
-                        records.append(record)
-                except (json.JSONDecodeError, IOError):
+                record = await read_json(str(json_file))
+                if record is None:
                     continue
+                
+                if model_name is None or record.get("model_name") == model_name:
+                    records.append(record)
         
         return records
-    
-    def generate_summary(self) -> Dict[str, Any]:
+
+    async def generate_summary(self) -> Dict[str, Any]:
         """
-        生成汇总报告（兼容旧接口）
+        异步生成汇总报告（兼容旧接口）
         
         Returns:
             汇总统计
         """
-        return self._collect_stats()
-    
-    def export_csv(self, output_path: Optional[str] = None) -> str:
+        return await self._collect_stats()
+
+    async def export_csv(self, output_path: Optional[str] = None) -> str:
         """
-        导出为CSV格式（兼容旧接口）
+        异步导出为CSV格式（兼容旧接口）
         
         Args:
             output_path: 输出文件路径
@@ -480,7 +495,7 @@ class IORecorder:
         Returns:
             CSV文件路径
         """
-        records = self.get_records()
+        records = await self.get_records()
         
         if not records:
             return ""
@@ -489,30 +504,34 @@ class IORecorder:
             output_path = str(self.task_dir / f"summary_{self.current_session}.csv")
         
         import csv
+        import io
         
-        with open(output_path, "w", encoding="utf-8", newline="") as f:
-            fieldnames = [
-                "id", "timestamp", "model_name", "round",
-                "ttft_seconds", "tpft_seconds", "total_time_seconds",
-                "input_tokens", "output_tokens", "tokens_per_second", "success"
-            ]
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            
-            for record in records:
-                metrics = record.get("metrics", {})
-                row = {
-                    "id": record.get("id", ""),
-                    "timestamp": record.get("timestamp", ""),
-                    "model_name": record.get("model_name", ""),
-                    "round": record.get("round", ""),
-                    "ttft_seconds": metrics.get("ttft_seconds", ""),
-                    "tpft_seconds": metrics.get("tpft_seconds", ""),
-                    "total_time_seconds": metrics.get("total_time_seconds", ""),
-                    "input_tokens": metrics.get("input_tokens", ""),
-                    "output_tokens": metrics.get("output_tokens", ""),
-                    "tokens_per_second": metrics.get("tokens_per_second", ""),
-                    "success": record.get("success", True)
-                }
-                writer.writerow(row)
+        # 在内存中构建 CSV，然后异步写入
+        output = io.StringIO()
+        fieldnames = [
+            "id", "timestamp", "model_name", "round",
+            "ttft_seconds", "tpft_seconds", "total_time_seconds",
+            "input_tokens", "output_tokens", "tokens_per_second", "success"
+        ]
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
         
+        for record in records:
+            metrics = record.get("metrics", {})
+            row = {
+                "id": record.get("id", ""),
+                "timestamp": record.get("timestamp", ""),
+                "model_name": record.get("model_name", ""),
+                "round": record.get("round", ""),
+                "ttft_seconds": metrics.get("ttft_seconds", ""),
+                "tpft_seconds": metrics.get("tpft_seconds", ""),
+                "total_time_seconds": metrics.get("total_time_seconds", ""),
+                "input_tokens": metrics.get("input_tokens", ""),
+                "output_tokens": metrics.get("output_tokens", ""),
+                "tokens_per_second": metrics.get("tokens_per_second", ""),
+                "success": record.get("success", True)
+            }
+            writer.writerow(row)
+        
+        await write_text(output_path, output.getvalue())
+        return output_path

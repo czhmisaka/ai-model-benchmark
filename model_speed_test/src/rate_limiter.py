@@ -97,32 +97,44 @@ class RateLimiter:
     async def __aenter__(self):
         """异步上下文管理器入口"""
         # 先等待信号量（控制并发数）
-        if self.config.backpressure:
+        semaphore_acquired = False
+        try:
             await asyncio.wait_for(
                 self._semaphore.acquire(),
                 timeout=self.config.timeout
             )
-        else:
-            # 不使用背压，只在超时时抛出异常
-            self._semaphore.acquire()
-        
-        # 再获取令牌（控制速率）
-        await asyncio.wait_for(
-            self._bucket.acquire(timeout=self.config.timeout),
-            timeout=self.config.timeout
-        )
-        return self
-    
+            semaphore_acquired = True
+
+            # 再获取令牌（控制速率）
+            await asyncio.wait_for(
+                self._bucket.acquire(timeout=self.config.timeout),
+                timeout=self.config.timeout
+            )
+            return self
+        except Exception:
+            # 如果在获取令牌阶段失败，释放已获取的信号量
+            if semaphore_acquired:
+                self._semaphore.release()
+            raise
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """异步上下文管理器出口"""
         self._semaphore.release()
         return False
-    
+
     async def acquire(self):
-        """手动获取许可（不使用上下文管理器时）"""
+        """手动获取许可（不使用上下文管理器时）
+        
+        显式处理信号量泄漏：如果 _bucket.acquire() 超时，
+        确保 _semaphore 被释放。
+        """
         await self._semaphore.acquire()
-        await self._bucket.acquire()
-    
+        try:
+            await self._bucket.acquire()
+        except Exception:
+            self._semaphore.release()
+            raise
+
     def release(self):
         """手动释放许可"""
         self._semaphore.release()
