@@ -1,5 +1,6 @@
 """
 统一API客户端测试
+（已同步当前实现：ModelClient 基于 Provider 系统，RetryConfig 位于 src.providers.base）
 """
 import sys
 from pathlib import Path
@@ -7,41 +8,42 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 import asyncio
-from src.client import ModelClient, RetryConfig, StreamChunk
+from src.client import ModelClient, StreamChunk
+from src.providers.base import RetryConfig
 
 
 class TestRetryConfig:
-    """RetryConfig 测试"""
+    """RetryConfig 测试（src/providers/base.py 当前接口）"""
     
     def test_default_values(self):
         """测试默认值"""
         config = RetryConfig()
         
-        assert config.max_retries == 3
+        assert config.max_attempts == 3
         assert config.initial_delay == 1.0
-        assert config.max_delay == 30.0
-        assert config.exponential_base == 2.0
+        assert config.max_delay == 60.0
+        assert config.backoff_factor == 2.0
     
     def test_custom_values(self):
         """测试自定义值"""
         config = RetryConfig(
-            max_retries=5,
+            max_attempts=5,
             initial_delay=0.5,
             max_delay=10.0,
-            exponential_base=3.0
+            backoff_factor=3.0
         )
         
-        assert config.max_retries == 5
+        assert config.max_attempts == 5
         assert config.initial_delay == 0.5
         assert config.max_delay == 10.0
-        assert config.exponential_base == 3.0
+        assert config.backoff_factor == 3.0
     
     def test_get_delay(self):
-        """测试延迟计算"""
+        """测试延迟计算（指数退避，封顶 max_delay）"""
         config = RetryConfig(
             initial_delay=1.0,
             max_delay=30.0,
-            exponential_base=2.0
+            backoff_factor=2.0
         )
         
         # 第0次尝试: 1 * 2^0 = 1
@@ -52,24 +54,29 @@ class TestRetryConfig:
         
         # 第2次尝试: 1 * 2^2 = 4
         assert config.get_delay(2) == 4.0
-        
-        # 第3次尝试: 1 * 2^3 = 8
-        assert config.get_delay(3) == 8.0
     
     def test_get_delay_max(self):
         """测试延迟上限"""
         config = RetryConfig(
             initial_delay=1.0,
             max_delay=10.0,
-            exponential_base=2.0
+            backoff_factor=2.0
         )
         
         # 超过最大值时应该被限制
         assert config.get_delay(10) == 10.0
+    
+    def test_should_retry(self):
+        """测试可重试错误判断"""
+        config = RetryConfig()
+        
+        assert config.should_retry(ConnectionError("net down")) is True
+        assert config.should_retry(TimeoutError("timeout")) is True
+        assert config.should_retry(ValueError("bad value")) is False
 
 
 class TestModelClient:
-    """ModelClient 测试"""
+    """ModelClient 测试（当前基于 Provider 系统的实现）"""
     
     @pytest.mark.asyncio
     async def test_init(self):
@@ -85,132 +92,55 @@ class TestModelClient:
         assert client.endpoint == "https://api.example.com/v1/chat/completions"
         assert client.api_key == "test-key"
         assert client.model == "test-model"
-        assert client.timeout == 120
-        assert client.retry_config is not None
+        assert client.timeout == 300.0
+        assert client.provider is not None
+        assert client.provider.get_provider_name() == "openai"
     
     @pytest.mark.asyncio
-    async def test_init_with_retry_config(self):
-        """测试带重试配置的初始化"""
-        retry_config = RetryConfig(max_retries=5)
+    async def test_init_unknown_provider_fallback(self):
+        """测试未知 Provider 回退到 openai"""
         client = ModelClient(
-            name="test-model",
-            endpoint="https://api.example.com/v1/chat/completions",
+            name="test",
+            endpoint="https://api.example.com",
             api_key="test-key",
-            model="test-model",
-            retry_config=retry_config
+            model="test",
+            provider="not-exist-provider"
         )
         
-        assert client.retry_config.max_retries == 5
+        # 回退到 openai，不应抛异常
+        assert client.provider is not None
     
-    def test_get_headers_without_key(self):
-        """测试无API Key的请求头"""
+    @pytest.mark.asyncio
+    async def test_init_with_extra_params(self):
+        """测试自定义参数传递"""
         client = ModelClient(
             name="test",
             endpoint="https://api.example.com",
-            api_key="",
-            model="test"
+            api_key="test-key",
+            model="test",
+            timeout=120.0,
+            temperature=0.3,
+            max_tokens=2048,
+            extra_params={"verify_ssl": False}
         )
         
-        headers = client._get_headers()
-        assert "Authorization" not in headers
+        assert client.timeout == 120.0
+        assert client.temperature == 0.3
+        assert client.max_tokens == 2048
+        assert client.extra_params == {"verify_ssl": False}
     
-    def test_get_headers_with_key(self):
-        """测试带API Key的请求头"""
+    @pytest.mark.asyncio
+    async def test_close(self):
+        """测试关闭连接"""
         client = ModelClient(
             name="test",
             endpoint="https://api.example.com",
-            api_key="test-key-123",
+            api_key="test-key",
             model="test"
         )
         
-        headers = client._get_headers()
-        assert "Authorization" in headers
-        assert headers["Authorization"] == "Bearer test-key-123"
-    
-    def test_get_headers_expands_env_vars(self):
-        """测试环境变量展开"""
-        import os
-        os.environ["TEST_API_KEY"] = "env-key-123"
-        
-        client = ModelClient(
-            name="test",
-            endpoint="https://api.example.com",
-            api_key="${TEST_API_KEY}",
-            model="test"
-        )
-        
-        headers = client._get_headers()
-        assert headers["Authorization"] == "Bearer env-key-123"
-        
-        del os.environ["TEST_API_KEY"]
-    
-    def test_build_messages_with_prompt(self):
-        """测试使用简单prompt构建消息"""
-        client = ModelClient(
-            name="test",
-            endpoint="https://api.example.com",
-            api_key="test",
-            model="test"
-        )
-        
-        messages = client._build_messages(prompt="Hello")
-        
-        assert len(messages) == 1
-        assert messages[0]["role"] == "user"
-        assert messages[0]["content"] == "Hello"
-    
-    def test_build_messages_with_system_prompt(self):
-        """测试使用系统提示词构建消息"""
-        client = ModelClient(
-            name="test",
-            endpoint="https://api.example.com",
-            api_key="test",
-            model="test"
-        )
-        
-        messages = client._build_messages(
-            prompt="Hello",
-            system_prompt="You are a helpful assistant."
-        )
-        
-        assert len(messages) == 2
-        assert messages[0]["role"] == "system"
-        assert messages[0]["content"] == "You are a helpful assistant."
-        assert messages[1]["role"] == "user"
-        assert messages[1]["content"] == "Hello"
-    
-    def test_build_messages_with_messages(self):
-        """测试使用消息数组"""
-        client = ModelClient(
-            name="test",
-            endpoint="https://api.example.com",
-            api_key="test",
-            model="test"
-        )
-        
-        input_messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello"}
-        ]
-        
-        messages = client._build_messages(messages=input_messages)
-        
-        assert messages == input_messages
-    
-    def test_build_messages_default(self):
-        """测试默认消息"""
-        client = ModelClient(
-            name="test",
-            endpoint="https://api.example.com",
-            api_key="test",
-            model="test"
-        )
-        
-        messages = client._build_messages()
-        
-        assert len(messages) == 1
-        assert messages[0]["role"] == "user"
-        assert messages[0]["content"] == "你好"
+        # 关闭不应抛异常
+        await client.close()
 
 
 class TestStreamChunk:
@@ -227,6 +157,15 @@ class TestStreamChunk:
         assert chunk.content == "Hello"
         assert chunk.is_first is True
         assert chunk.timestamp == 1234567890.0
+    
+    def test_defaults(self):
+        """测试默认值"""
+        chunk = StreamChunk()
+        
+        assert chunk.content == ""
+        assert chunk.is_first is False
+        assert chunk.is_think is False
+        assert chunk.error is None
 
 
 if __name__ == "__main__":

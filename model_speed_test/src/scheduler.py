@@ -3,10 +3,12 @@
 支持定时任务、报告自动生成、Webhook通知
 """
 import asyncio
+import calendar
 import json
 import os
+import re
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Set
 from dataclasses import dataclass, field
 from enum import Enum
 import aiohttp
@@ -42,13 +44,20 @@ class ScheduleConfig:
     day_of_month: int = 1   # 每月几号
     cron_expression: str = ""  # Cron表达式
     
-    def get_next_run_time(self, from_time: datetime = None) -> datetime:
-        """计算下次执行时间"""
+    def get_next_run_time(self, from_time: datetime = None) -> Optional[datetime]:
+        """
+        计算下次执行时间
+        
+        Returns:
+            下次执行时间；ONCE 类型返回 None（表示执行一次后不再调度）
+        """
         if from_time is None:
             from_time = datetime.now()
         
         if self.schedule_type == "once":
-            return from_time
+            # ONCE：一次性任务，返回 None 表示调度结束。
+            # 调用方应将 next_run 置空，避免无限重复执行。
+            return None
         elif self.schedule_type == "daily":
             next_time = from_time.replace(hour=self.hour, minute=self.minute, second=0, microsecond=0)
             if next_time <= from_time:
@@ -62,17 +71,200 @@ class ScheduleConfig:
             next_time = next_time.replace(hour=self.hour, minute=self.minute, second=0, microsecond=0)
             return next_time
         elif self.schedule_type == "monthly":
-            if from_time.day < self.day_of_month:
-                next_time = from_time.replace(day=self.day_of_month, hour=self.hour, minute=self.minute, second=0, microsecond=0)
-            else:
-                # 下个月
-                if from_time.month == 12:
-                    next_time = from_time.replace(year=from_time.year+1, month=1, day=self.day_of_month, hour=self.hour, minute=self.minute, second=0, microsecond=0)
-                else:
-                    next_time = from_time.replace(month=from_time.month+1, day=self.day_of_month, hour=self.hour, minute=self.minute, second=0, microsecond=0)
-            return next_time
+            return _monthly_next_run(
+                from_time,
+                day=self.day_of_month,
+                hour=self.hour,
+                minute=self.minute
+            )
+        elif self.schedule_type == "cron":
+            if not self.cron_expression:
+                return None
+            try:
+                return cron_next_run(self.cron_expression, from_time)
+            except Exception as e:
+                print(f"[Scheduler] Cron 表达式解析失败 '{self.cron_expression}': {e}")
+                return None
         
-        return from_time
+        return None
+
+
+def _monthly_next_run(from_time: datetime, day: int, hour: int, minute: int) -> datetime:
+    """计算每月指定日期的下一次执行时间（自动 clamp 到月末）"""
+    # 目标日超出当月最大天数时 clamp 到月末（如 31 日在 2 月 → 2/28 或 2/29）
+    max_day = calendar.monthrange(from_time.year, from_time.month)[1]
+    target_day = min(day, max_day)
+    
+    next_time = from_time.replace(day=target_day, hour=hour, minute=minute, second=0, microsecond=0)
+    if next_time <= from_time:
+        # 推进到下一个月的目标日
+        if from_time.month == 12:
+            next_year, next_month = from_time.year + 1, 1
+        else:
+            next_year, next_month = from_time.year, from_time.month + 1
+        max_day_next = calendar.monthrange(next_year, next_month)[1]
+        next_time = next_time.replace(
+            year=next_year,
+            month=next_month,
+            day=min(day, max_day_next),
+            hour=hour,
+            minute=minute,
+            second=0,
+            microsecond=0
+        )
+    return next_time
+
+
+def _parse_cron_field(field: str, min_val: int, max_val: int) -> Set[int]:
+    """解析单个 cron 字段：支持 *、*/n、a-b、a-b/n、a,b,c、具体数字"""
+    values: Set[int] = set()
+    field = field.strip()
+    if field == "" or field == "*":
+        return set(range(min_val, max_val + 1))
+    
+    for part in field.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        
+        # 步长解析：base/step，base 可为 * 或 a-b
+        step = 1
+        if "/" in part:
+            base_str, step_str = part.split("/", 1)
+            try:
+                step = int(step_str)
+            except ValueError:
+                continue
+            if step <= 0:
+                continue
+        else:
+            base_str = part
+        
+        if base_str == "*":
+            start, end = min_val, max_val
+        elif "-" in base_str:
+            parts = base_str.split("-", 1)
+            try:
+                start, end = int(parts[0]), int(parts[1])
+            except ValueError:
+                continue
+            if start < min_val:
+                start = min_val
+            if end > max_val:
+                end = max_val
+        else:
+            try:
+                single = int(base_str)
+                if min_val <= single <= max_val:
+                    values.add(single)
+                continue
+            except ValueError:
+                continue
+        
+        values.update(range(start, end + 1, step))
+    
+    return values
+
+
+def _parse_cron_expression(expression: str) -> Dict[str, Set[int]]:
+    """
+    解析 5 字段 cron 表达式：分 时 日 月 周
+    (秒级不支持，周支持 0-6，0/7=周日)
+    """
+    fields = expression.strip().split()
+    if len(fields) != 5:
+        raise ValueError(f"cron 表达式必须为 5 字段（分 时 日 月 周），收到: {expression!r}")
+    
+    minute_set = _parse_cron_field(fields[0], 0, 59)
+    hour_set = _parse_cron_field(fields[1], 0, 23)
+    day_set = _parse_cron_field(fields[2], 1, 31)
+    month_set = _parse_cron_field(fields[3], 1, 12)
+    
+    # 周：cron 语义 0/7=周日, 1=周一 ... 6=周六
+    # 转换为 Python datetime.weekday()（0=周一 ... 6=周日）
+    weekday_set: Set[int] = set()
+    for w in _parse_cron_field(fields[4], 0, 7):
+        weekday_set.add((w - 1) % 7)
+    
+    return {
+        "minute": minute_set,
+        "hour": hour_set,
+        "day": day_set,
+        "month": month_set,
+        "weekday": weekday_set,
+    }
+
+
+def cron_next_run(expression: str, from_time: datetime = None) -> datetime:
+    """
+    计算 cron 表达式的下一次执行时间（向后逐级推进，最多搜索 4 年）
+    
+    算法：从下一分钟开始，依次校验 月→日/周→时→分，
+    每层不匹配时直接推进到该层下一个候选值，避免低效逐分钟扫描。
+    """
+    if from_time is None:
+        from_time = datetime.now()
+    
+    parsed = _parse_cron_expression(expression)
+    
+    day_is_star = (len(parsed["day"]) == 31)
+    weekday_is_star = (len(parsed["weekday"]) == 7)
+    
+    # 从下一分钟开始搜索
+    candidate = from_time.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    
+    for _ in range(366 * 4):  # 最多搜索 4 年
+        # 1. 月匹配？
+        if candidate.month not in parsed["month"]:
+            # 推进到下个月 1 号 00:00
+            if candidate.month == 12:
+                candidate = candidate.replace(year=candidate.year + 1, month=1, day=1, hour=0, minute=0)
+            else:
+                candidate = candidate.replace(month=candidate.month + 1, day=1, hour=0, minute=0)
+            continue
+        
+        # 2. 日/周匹配（标准 cron 语义）：
+        #    - day=* 且 weekday=* → 每天
+        #    - day=* → 只按 weekday 匹配
+        #    - weekday=* → 只按 day 匹配
+        #    - 两者都限定 → 任一匹配（OR）
+        day_ok = candidate.day in parsed["day"]
+        weekday_ok = candidate.weekday() in parsed["weekday"]
+        if day_is_star and weekday_is_star:
+            day_weekday_ok = True
+        elif day_is_star:
+            day_weekday_ok = weekday_ok
+        elif weekday_is_star:
+            day_weekday_ok = day_ok
+        else:
+            day_weekday_ok = day_ok or weekday_ok
+        
+        if not day_weekday_ok:
+            candidate = candidate.replace(hour=0, minute=0) + timedelta(days=1)
+            continue
+        
+        # 3. 小时匹配？
+        if candidate.hour not in parsed["hour"]:
+            next_hours = sorted(h for h in parsed["hour"] if h > candidate.hour)
+            if next_hours:
+                candidate = candidate.replace(hour=next_hours[0], minute=0)
+            else:
+                candidate = candidate.replace(hour=0, minute=0) + timedelta(days=1)
+            continue
+        
+        # 4. 分钟匹配？
+        if candidate.minute not in parsed["minute"]:
+            next_mins = sorted(m for m in parsed["minute"] if m > candidate.minute)
+            if next_mins:
+                candidate = candidate.replace(minute=next_mins[0])
+            else:
+                candidate = candidate.replace(hour=0, minute=0) + timedelta(days=1)
+            continue
+        
+        # 全部匹配
+        return candidate
+    
+    raise ValueError(f"无法在 4 年内找到 cron 表达式的下次执行时间: {expression!r}")
 
 
 @dataclass
@@ -251,8 +443,9 @@ class TestScheduler:
     
     def add_task(self, task: TestTask) -> str:
         """添加任务"""
-        # 计算下次执行时间
-        task.next_run = task.schedule.get_next_run_time().isoformat()
+        # 计算下次执行时间（ONCE 返回 None → next_run 置空）
+        next_run = task.schedule.get_next_run_time()
+        task.next_run = next_run.isoformat() if next_run else ""
         self._tasks[task.id] = task
         self._save_all()
         return task.id
@@ -266,7 +459,8 @@ class TestScheduler:
         
         if "schedule" in updates:
             task.schedule = ScheduleConfig(**updates["schedule"])
-            task.next_run = task.schedule.get_next_run_time().isoformat()
+            next_run = task.schedule.get_next_run_time()
+            task.next_run = next_run.isoformat() if next_run else ""
         
         for key, value in updates.items():
             if key != "schedule" and hasattr(task, key):
@@ -332,7 +526,9 @@ class TestScheduler:
         # 更新任务状态
         task.status = "completed" if result["success"] else "failed"
         task.last_run = start_time.isoformat()
-        task.next_run = task.schedule.get_next_run_time(from_time=end_time).isoformat()
+        next_run = task.schedule.get_next_run_time(from_time=end_time)
+        # ONCE 任务执行后 next_run 置空，不再重复调度
+        task.next_run = next_run.isoformat() if next_run else ""
         task.last_result = result
         self._save_all()
         
@@ -381,12 +577,21 @@ class TestScheduler:
             await asyncio.sleep(check_interval)
 
     async def _execute_with_cleanup(self, task_id: str):
-        """执行任务并在结束时清理状态（确保异常路径也恢复状态）"""
+        """执行任务并处理异常路径
+
+        说明：execute_task 内部已把状态置为 completed/failed，
+        这里不再覆盖（旧逻辑强制置 idle 会导致 ONCE/CRON 任务
+        状态丢失、无限重复触发）。仅在 execute_task 抛异常时
+        做兜底复位，避免卡在 running。
+        """
         try:
             await self.execute_task(task_id)
-        finally:
+        except Exception as e:
+            print(f"[Scheduler] 任务 {task_id} 执行异常: {e}")
             if task_id in self._tasks:
-                self._tasks[task_id].status = "idle"
+                self._tasks[task_id].status = "failed"
+                self._tasks[task_id].last_result = {"error": str(e)}
+                self._save_all()
     
     async def start(self, check_interval: int = 60):
         """启动调度器"""

@@ -1523,16 +1523,22 @@ def _async_raise(tid, exctype):
         print(f"强制停止线程失败: {e}")
 
 
-def stop_test_thread():
-    """强制停止测试线程"""
+def stop_test_thread(timeout: float = 15.0):
+    """协作式停止测试线程：先发停止信号，再等待线程自行退出
+
+    不再使用 ctypes 强杀（SystemExit 会在任意字节码边界注入，
+    跳过清理逻辑导致 _test_running 永久卡 True）。测试线程内部
+    通过 stop_event + should_stop() 检查实现协作取消。
+    """
     global _test_thread
     
     if _test_thread and _test_thread.is_alive():
-        print(f"正在强制停止测试线程: {_test_thread.ident}")
-        try:
-            _async_raise(_test_thread.ident, SystemExit)
-        except Exception as e:
-            print(f"停止线程时出错: {e}")
+        print(f"[Stop] 等待测试线程 {_test_thread.ident} 退出 (超时 {timeout}s)...")
+        _test_thread.join(timeout=timeout)
+        if _test_thread.is_alive():
+            print(f"[Stop] 警告: 测试线程 {_test_thread.ident} 在 {timeout}s 内未退出（可能阻塞在网络请求），等待其自行完成")
+        else:
+            print("[Stop] 测试线程已退出")
     
     _test_thread = None
 
@@ -2197,12 +2203,22 @@ async def start_test(request: Request):
         
         # 在新的事件循环中运行
         asyncio.run(run_all_concurrent())
-        
-        global _test_running
-        _test_running = False
     
-    # 使用非守护线程以便可以强制停止
-    thread = threading.Thread(target=run_test, daemon=False)
+    # 包装函数：确保无论 run_test 正常结束还是抛异常，_test_running 都复位，
+    # 避免服务永久卡在"测试已在运行中"（协作式停止的配套保障）
+    def run_test_safe():
+        global _test_running
+        try:
+            run_test()
+        except Exception as e:
+            print(f"[Test] 测试线程异常: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            _test_running = False
+    
+    # 使用 daemon 线程（不阻塞进程退出）；停止依赖协作式 stop_event，不强杀
+    thread = threading.Thread(target=run_test_safe, daemon=True)
     thread.start()
     
     # 保存线程引用以便后续停止
@@ -2291,17 +2307,17 @@ async def start_test(request: Request):
 
 @app.post("/test/stop")
 async def stop_test():
-    """停止测试"""
+    """停止测试（协作式取消）"""
     global _test_running
     
-    # 触发停止事件
+    # 触发停止事件（测试线程内 should_stop() 会响应并退出）
     stop_event = get_stop_event()
     if stop_event and not stop_event.is_set():
         stop_event.set()
         print("已发送停止信号...")
     
-    # 强制停止测试线程
-    stop_test_thread()
+    # 等待测试线程退出（协作式，不再强杀；_test_running 由 run_test 的 finally 复位）
+    stop_test_thread(timeout=15.0)
     
     # 获取当前的 group_id 并发送汇总事件
     try:
@@ -2337,7 +2353,12 @@ async def stop_test():
     except Exception as e:
         print(f"[Stop] 更新统计失败: {e}")
     
-    _test_running = False
+    # 兜底：正常情况下 _test_running 由 run_test 的 finally 复位。
+    # 若线程已退出但标志未复位（极少数异常路径），这里强制复位，
+    # 避免服务永久卡在"测试已在运行中"。
+    global _test_thread
+    if _test_running and (_test_thread is None or not _test_thread.is_alive()):
+        _test_running = False
     # 传入 False 保留状态文件，刷新页面后可以恢复任务进度
     test_emitter.reset(clear_state_file=False)
     return {"status": "stopped"}
@@ -2737,3 +2758,88 @@ async def get_markdown_report(group_id: str, template: str = "default"):
         return {"success": True, "content": content, "stats": {"total": total, "successRate": round(success_rate, 1), "avgTtft": round(avg_ttft * 1000, 2), "avgTps": round(avg_tps, 2)}}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ===== Webhook 配置端点（SDK 兼容） =====
+WEBHOOK_CONFIG_KEY = "webhook_config"
+
+
+def _load_webhook_config() -> dict:
+    """从 system_config 表读取 webhook 配置"""
+    import sqlite3
+    from pathlib import Path
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    if not config_db_path.exists():
+        return {}
+    try:
+        conn = sqlite3.connect(str(config_db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM system_config WHERE key = ?", (WEBHOOK_CONFIG_KEY,))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row["value"]:
+            return json.loads(row["value"])
+    except Exception as e:
+        print(f"[Webhook] 读取配置失败: {e}")
+    return {}
+
+
+def _save_webhook_config(config: dict) -> bool:
+    """保存 webhook 配置到 system_config 表"""
+    import sqlite3
+    from pathlib import Path
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    if not config_db_path.exists():
+        return False
+    try:
+        conn = sqlite3.connect(str(config_db_path))
+        cursor = conn.cursor()
+        value = json.dumps(config, ensure_ascii=False)
+        cursor.execute("""
+            INSERT INTO system_config (key, value, updated_at)
+            VALUES (?, ?, datetime('now', 'localtime'))
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        """, (WEBHOOK_CONFIG_KEY, value))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"[Webhook] 保存配置失败: {e}")
+        return False
+
+
+@app.get("/api/webhook/config")
+async def get_webhook_config():
+    """获取 Webhook 配置"""
+    config = _load_webhook_config()
+    return {"success": True, "config": config}
+
+
+@app.post("/api/webhook/config")
+async def configure_webhook(data: dict):
+    """配置 Webhook（SDK: configure_webhook）"""
+    url = data.get("url", "")
+    if not url:
+        return {"success": False, "error": "webhook URL 不能为空"}
+    if not url.startswith(("http://", "https://")):
+        return {"success": False, "error": "webhook URL 必须以 http:// 或 https:// 开头"}
+    
+    config = _load_webhook_config()
+    config["url"] = url
+    config["events"] = data.get("events") or ["test_complete"]
+    config["enabled"] = bool(data.get("enabled", True))
+    if data.get("secret"):
+        config["secret"] = data["secret"]
+    
+    if _save_webhook_config(config):
+        return {"success": True, "config": config}
+    return {"success": False, "error": "保存失败（config.db 不可写）"}
+
+
+@app.delete("/api/webhook/config")
+async def delete_webhook_config():
+    """删除 Webhook 配置"""
+    if _save_webhook_config({}):
+        return {"success": True}
+    return {"success": False, "error": "删除失败（config.db 不可写）"}

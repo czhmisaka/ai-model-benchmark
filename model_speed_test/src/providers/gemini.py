@@ -281,6 +281,7 @@ class GeminiProvider(BaseLLMProvider):
                     return
                 
                 # 解析流式响应
+                first_content_sent = False
                 async for line in response.content:
                     line = line.decode('utf-8').strip()
                     
@@ -299,9 +300,10 @@ class GeminiProvider(BaseLLMProvider):
                                 if "text" in part:
                                     yield StreamChunk(
                                         content=part["text"],
-                                        is_first=False,
+                                        is_first=not first_content_sent,
                                         timestamp=time.perf_counter()
                                     )
+                                    first_content_sent = True
                         
                         # 检查是否完成
                         if data.get("done", False):

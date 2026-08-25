@@ -137,6 +137,9 @@ class OpenAIProvider(BaseLLMProvider):
                 choice = choices[0]
                 message = choice.get("message", {})
 
+                # 提取 reasoning_content（DeepSeek 等模型的思考内容，非流式场景）
+                reasoning_content = message.get("reasoning_content") or message.get("reasoning") or ""
+
                 # 获取 usage 信息
                 usage = data.get("usage", {})
 
@@ -149,6 +152,7 @@ class OpenAIProvider(BaseLLMProvider):
                     model=data.get("model", self.config.model),
                     response_id=data.get("id", ""),
                     created=data.get("created", 0),
+                    think_content=reasoning_content,
                     raw_response=data
                 )
         except Exception as e:
@@ -183,10 +187,15 @@ class OpenAIProvider(BaseLLMProvider):
                 async for line in response.content:
                     line = line.decode("utf-8").strip()
 
-                    if not line or not line.startswith("data: "):
+                    # 兼容 "data: {...}" 和 "data:{...}" 两种 SSE 格式
+                    if not line or not (line.startswith("data: ") or line.startswith("data:")):
                         continue
 
-                    data_str = line[6:]  # 去掉 "data: " 前缀
+                    # 去掉 "data:" 前缀（兼容有/无空格）
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                    else:
+                        data_str = line[5:]
 
                     if data_str == "[DONE]":
                         break
@@ -247,16 +256,11 @@ class OpenAIProvider(BaseLLMProvider):
                 is_think_end = False
                 
                 # 检测 think 标签（某些模型使用标签）
-                if not in_think:
-                    if '<begin_of_thought>' in content:
-                        is_think = True
-                    if '<end_of_thought>' in content:
-                        is_think_end = True
-                    # 也支持 <think> 标签
-                    if '<begin_of_think>' in content:
-                        is_think = True
-                    if '<end_of_think>' in content:
-                        is_think_end = True
+                # 注意：不再使用 if not in_think: 前置条件，否则一旦进入 think 状态就再也检测不到结束标签
+                if '<begin_of_thought>' in content or '<begin_of_think>' in content:
+                    is_think = True
+                if '<end_of_thought>' in content or '<end_of_think>' in content:
+                    is_think_end = True
                 
                 # 判断是否为最终块（纯 finish_reason 块，无内容/推理）
                 is_final = bool(finish_reason) and not has_content

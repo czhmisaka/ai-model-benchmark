@@ -143,24 +143,30 @@ class AnthropicProvider(BaseLLMProvider):
             # 构建请求体
             converted = self._convert_messages(messages)
             max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
+            # 保护：max_tokens<=0（如 tester 传入的 -1）时使用配置值。
+            # Anthropic API 的 max_tokens 为必填项，不能省略。
+            if not max_tokens or max_tokens <= 0:
+                max_tokens = self.config.max_tokens or 4096
             temperature = kwargs.get("temperature", self.config.temperature)
             
             body = {
                 "model": self.config.model,
                 "messages": converted["messages"],
                 "max_tokens": max_tokens,
-                "temperature": temperature,
             }
             
-            if converted["system"]:
-                body["system"] = converted["system"]
-            
-            # 添加 thinking 扩展（如果启用）
+            # 添加 thinking 扩展（如果启用）。
+            # Anthropic API 规定 thinking 启用时不允许设置 temperature（须为 1 或省略）
             if self.config.thinking_enabled:
                 body["thinking"] = {
                     "type": "enabled",
                     "budget_tokens": self.thinking_budget
                 }
+            else:
+                body["temperature"] = temperature
+            
+            if converted["system"]:
+                body["system"] = converted["system"]
             
             # 发送请求
             async with session.post(
@@ -225,25 +231,29 @@ class AnthropicProvider(BaseLLMProvider):
             # 构建请求体
             converted = self._convert_messages(messages)
             max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
+            # 保护：max_tokens<=0（如 tester 传入的 -1）时使用配置值。
+            if not max_tokens or max_tokens <= 0:
+                max_tokens = self.config.max_tokens or 4096
             temperature = kwargs.get("temperature", self.config.temperature)
             
             body = {
                 "model": self.config.model,
                 "messages": converted["messages"],
                 "max_tokens": max_tokens,
-                "temperature": temperature,
                 "stream": True
             }
             
-            if converted["system"]:
-                body["system"] = converted["system"]
-            
-            # 添加 thinking 扩展
+            # thinking 启用时不发送 temperature（Anthropic API 约束）
             if self.config.thinking_enabled:
                 body["thinking"] = {
                     "type": "enabled",
                     "budget_tokens": self.thinking_budget
                 }
+            else:
+                body["temperature"] = temperature
+            
+            if converted["system"]:
+                body["system"] = converted["system"]
             
             # 发送流式请求
             async with session.post(
@@ -260,6 +270,7 @@ class AnthropicProvider(BaseLLMProvider):
                 # 解析 SSE 流
                 in_think = False
                 think_start_time = None
+                first_content_sent = False
                 async for line in response.content:
                     line = line.decode('utf-8').strip()
                     
@@ -276,12 +287,10 @@ class AnthropicProvider(BaseLLMProvider):
                             data = json.loads(data_str)
                             event_type = data.get("type", "")
                             
+                            # message_start 是服务器开始处理事件，不含内容；
+                            # is_first 应标记第一个携带内容的块，避免 TTFT 计入服务延迟
                             if event_type == "message_start":
-                                yield StreamChunk(
-                                    content="",
-                                    is_first=True,
-                                    timestamp=time.perf_counter()
-                                )
+                                pass
                             
                             elif event_type == "content_block_start":
                                 block_type = data.get("content_block", {}).get("type", "")
@@ -299,11 +308,12 @@ class AnthropicProvider(BaseLLMProvider):
                                 if delta_content:
                                     chunk = StreamChunk(
                                         content=delta_content,
-                                        is_first=False,
+                                        is_first=not first_content_sent,
                                         timestamp=time.perf_counter(),
                                         is_think=in_think,
                                         is_think_end=False
                                     )
+                                    first_content_sent = True
                                     yield chunk
                             
                             elif event_type == "content_block_stop":

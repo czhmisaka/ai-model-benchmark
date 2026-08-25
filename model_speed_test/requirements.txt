@@ -1,40 +1,33 @@
-# AI模型速度测试框架依赖
+# AI模型速度测试框架依赖（版本已锁定）
+# 生成于 2026-08-25，基于验证可用的版本组合
 
 # 异步HTTP客户端
-aiohttp>=3.9.0
+aiohttp==3.13.3
 
 # YAML配置解析
-PyYAML>=6.0
+PyYAML==6.0.1
 
 # Web服务
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-jinja2>=3.1.0
-
-# API文档
-fastapi-utils>=5.0.0
-
-# 定时任务调度
-APScheduler>=3.10.0
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+jinja2==3.1.6
 
 # Token计算（精确）
-tiktoken>=0.5.0
+tiktoken==0.13.0
 
 # 异步文件 I/O
-aiofiles>=23.0.0
+aiofiles==22.1.0
 
 # 异步 SQLite 驱动
-aiosqlite>=0.19.0
+aiosqlite==0.22.1
 
-# Python 3.10+ 内置asyncio，不需要额外安装
-
-# ===== 新增：报告生成相关依赖 =====
+# ===== 报告生成相关依赖 =====
 
 # PDF 生成
-weasyprint>=60.0
+weasyprint==68.1
 
 # Excel 导出
-openpyxl>=3.1.0
+openpyxl==3.1.2
 
-# 数据处理
-pandas>=2.0.0
+# 环境变量加载（main.py 使用）
+python-dotenv>=1.0.0

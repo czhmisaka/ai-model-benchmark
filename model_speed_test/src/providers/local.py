@@ -185,13 +185,25 @@ class LMStudioProvider(BaseLLMProvider):
                             
                             delta = choices[0].get("delta", {})
                             content = delta.get("content", "")
+                            # 兼容 reasoning_content / reasoning 字段（思考型模型）
+                            reasoning_content = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                            finish_reason = choices[0].get("finish_reason") or ""
                             
-                            if content:
-                                yield StreamChunk(
-                                    content=content,
-                                    is_first=False,
-                                    timestamp=time.perf_counter()
-                                )
+                            has_content = bool(content) or bool(reasoning_content)
+                            # 跳过纯 role 初始化块（不消耗 is_first）
+                            if not has_content and not finish_reason:
+                                continue
+                            
+                            is_think = bool(reasoning_content)
+                            yield StreamChunk(
+                                content=content,
+                                is_first=has_content and not is_think,
+                                timestamp=time.perf_counter(),
+                                is_think=is_think,
+                                reasoning_content=reasoning_content or None,
+                                finish_reason=finish_reason,
+                                usage=data.get("usage", {})
+                            )
                         
                         except json.JSONDecodeError:
                             continue

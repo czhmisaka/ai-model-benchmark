@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 import time
-from src.metrics import TestMetrics, MetricsCalculator
+from src.metrics import TestMetrics as MetricsDataClass, MetricsCalculator
 
 
 class TestTestMetrics:
@@ -15,7 +15,7 @@ class TestTestMetrics:
     
     def test_default_values(self):
         """测试默认值"""
-        metrics = TestMetrics()
+        metrics = MetricsDataClass()
         assert metrics.ttft == 0.0
         assert metrics.tpft == 0.0
         assert metrics.total_time == 0.0
@@ -24,7 +24,7 @@ class TestTestMetrics:
     
     def test_tokens_per_second_calculation(self):
         """测试吞吐量计算"""
-        metrics = TestMetrics()
+        metrics = MetricsDataClass()
         metrics.tpft = 10.0  # 10秒
         metrics.output_tokens = 100  # 100 tokens
         
@@ -32,7 +32,7 @@ class TestTestMetrics:
     
     def test_tokens_per_second_zero_tpft(self):
         """测试零TPFT的吞吐量"""
-        metrics = TestMetrics()
+        metrics = MetricsDataClass()
         metrics.tpft = 0.0
         metrics.output_tokens = 100
         
@@ -40,7 +40,7 @@ class TestTestMetrics:
     
     def test_total_tokens_per_second(self):
         """测试总时间吞吐量"""
-        metrics = TestMetrics()
+        metrics = MetricsDataClass()
         metrics.total_time = 20.0
         metrics.output_tokens = 100
         
@@ -48,7 +48,7 @@ class TestTestMetrics:
     
     def test_to_dict(self):
         """测试转换为字典"""
-        metrics = TestMetrics()
+        metrics = MetricsDataClass()
         metrics.ttft = 1.5
         metrics.tpft = 8.5
         metrics.total_time = 10.0
@@ -92,7 +92,8 @@ class TestMetricsCalculator:
         )
         
         assert metrics.ttft == pytest.approx(1.0, rel=0.1)
-        assert metrics.total_time == pytest.approx(0.5, rel=0.1)
+        # total_time = 最后一个 chunk 时间 - 开始时间 = 1.5
+        assert metrics.total_time == pytest.approx(1.5, rel=0.1)
         assert metrics.output_tokens > 0
     
     def test_calculate_nonstream_metrics(self):
@@ -121,7 +122,7 @@ class TestMetricsCalculator:
     def test_aggregate_metrics_single(self):
         """测试单条记录聚合"""
         metrics_list = [
-            TestMetrics(ttft=1.0, tpft=9.0, total_time=10.0, output_tokens=100)
+            MetricsDataClass(ttft=1.0, tpft=9.0, total_time=10.0, output_tokens=100)
         ]
         
         result = MetricsCalculator.aggregate_metrics(metrics_list)
@@ -134,9 +135,9 @@ class TestMetricsCalculator:
     def test_aggregate_metrics_multiple(self):
         """测试多条记录聚合"""
         metrics_list = [
-            TestMetrics(ttft=1.0, tpft=9.0, total_time=10.0, output_tokens=100),
-            TestMetrics(ttft=2.0, tpft=8.0, total_time=10.0, output_tokens=100),
-            TestMetrics(ttft=1.5, tpft=8.5, total_time=10.0, output_tokens=100),
+            MetricsDataClass(ttft=1.0, tpft=9.0, total_time=10.0, output_tokens=100),
+            MetricsDataClass(ttft=2.0, tpft=8.0, total_time=10.0, output_tokens=100),
+            MetricsDataClass(ttft=1.5, tpft=8.5, total_time=10.0, output_tokens=100),
         ]
         
         result = MetricsCalculator.aggregate_metrics(metrics_list)

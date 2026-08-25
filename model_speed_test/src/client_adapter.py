@@ -59,30 +59,45 @@ class ProviderAdapter:
     
     async def chat(
         self,
-        prompt: str,
+        prompt: str = None,
         max_tokens: int = 4096,
         temperature: Optional[float] = None,
         stream: bool = False,
-        system: Optional[str] = None
+        system: Optional[str] = None,
+        messages: list = None,
+        system_prompt: str = None
     ) -> Dict[str, Any]:
         """
-        发送聊天请求
+        发送聊天请求（兼容 ModelClient.chat 调用契约）
         
         Args:
             prompt: 提示词
             max_tokens: 最大 token 数
             temperature: 温度参数
             stream: 是否使用流式
-            system: 系统提示
+            system: 系统提示（兼容别名）
+            messages: 消息数组（优先于 prompt）
+            system_prompt: 系统提示词（优先于 system）
             
         Returns:
             响应结果（兼容 ModelClient 格式）
         """
-        # 构建消息
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
+        # 构建消息：优先使用 messages/system_prompt（tester.py 的调用方式）
+        if messages is not None:
+            chat_messages = []
+            sys_prompt = system_prompt if system_prompt is not None else system
+            if sys_prompt:
+                chat_messages.append({"role": "system", "content": sys_prompt})
+            chat_messages.extend(messages)
+            messages = chat_messages
+        else:
+            messages = []
+            if system_prompt is not None:
+                messages.append({"role": "system", "content": system_prompt})
+            elif system:
+                messages.append({"role": "system", "content": system})
+            if prompt:
+                messages.append({"role": "user", "content": prompt})
         
         if stream:
             return await self._stream_chat(messages, max_tokens, temperature)
@@ -113,10 +128,14 @@ class ProviderAdapter:
         
         result = await self._provider.chat(provider_messages, **kwargs)
         
-        # 转换结果格式
+        # 转换结果格式（与 ModelClient.chat 契约一致：
+        # 顶层必须有 input_tokens/output_tokens，tester._test_nonstream 依赖它们判断有效性）
         return {
             "content": result.content,
             "error": result.error,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+            "total_tokens": result.total_tokens,
             "usage": {
                 "prompt_tokens": result.input_tokens,
                 "completion_tokens": result.output_tokens,
@@ -153,14 +172,14 @@ class ProviderAdapter:
         think_content_parts = []
         
         async for chunk in self._provider.stream_chat(provider_messages, **kwargs):
-            if chunk.content:
-                content_parts.append(chunk.content)
-            # 优先使用 reasoning_content（从 reasoning 字段分离出来的内容）
+            # 思考内容只进 think_content_parts，绝不同时进 content（避免双重计数）
             if chunk.is_think:
                 if hasattr(chunk, 'reasoning_content') and chunk.reasoning_content:
                     think_content_parts.append(chunk.reasoning_content)
                 elif chunk.content:
                     think_content_parts.append(chunk.content)
+            elif chunk.content:
+                content_parts.append(chunk.content)
         
         return {
             "content": "".join(content_parts),

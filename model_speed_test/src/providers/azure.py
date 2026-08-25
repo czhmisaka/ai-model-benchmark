@@ -167,6 +167,7 @@ class AzureOpenAIProvider(BaseLLMProvider):
                     return
                 
                 # 解析 SSE 流
+                first_content_sent = False
                 async for line in response.content:
                     line = line.decode('utf-8').strip()
                     
@@ -188,13 +189,26 @@ class AzureOpenAIProvider(BaseLLMProvider):
                             
                             delta = choices[0].get("delta", {})
                             content = delta.get("content", "")
+                            reasoning_content = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                            finish_reason = choices[0].get("finish_reason") or ""
                             
-                            if content:
-                                yield StreamChunk(
-                                    content=content,
-                                    is_first=False,
-                                    timestamp=time.perf_counter()
-                                )
+                            has_content = bool(content) or bool(reasoning_content)
+                            # 跳过纯 role 初始化块
+                            if not has_content and not finish_reason:
+                                continue
+                            
+                            is_think = bool(reasoning_content)
+                            yield StreamChunk(
+                                content=content,
+                                is_first=has_content and not first_content_sent,
+                                timestamp=time.perf_counter(),
+                                is_think=is_think,
+                                reasoning_content=reasoning_content or None,
+                                finish_reason=finish_reason,
+                                usage=data.get("usage", {})
+                            )
+                            if has_content:
+                                first_content_sent = True
                         
                         except json.JSONDecodeError:
                             continue

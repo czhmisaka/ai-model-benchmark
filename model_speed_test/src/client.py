@@ -124,19 +124,20 @@ class ModelClient:
         if stream:
             full_content = ""
             reasoning_content = ""
-            first_token_time = None
             chunks = []
+            last_usage = None
             
             async for chunk in self.provider.stream_chat(chat_messages, max_tokens=max_tokens, temperature=temperature, **kwargs):
                 if chunk.error:
                     return {"error": chunk.error}
                 
-                if chunk.is_first and first_token_time is None:
-                    first_token_time = time.time()
+                # usage 可能出现在流末尾的 usage 块，单独记录
+                if getattr(chunk, 'usage', None):
+                    last_usage = chunk.usage
                 
+                # content 只装 answer；reasoning 单独聚合（与非流式语义一致）
                 if chunk.reasoning_content:
                     reasoning_content += chunk.reasoning_content
-                    full_content += chunk.reasoning_content
                 
                 full_content += chunk.content
                 
@@ -150,7 +151,7 @@ class ModelClient:
                 "content": full_content,
                 "reasoning_content": reasoning_content if reasoning_content else None,
                 "chunks": chunks,
-                "usage": chunks[-1].get("usage") if chunks else None
+                "usage": last_usage
             }
         else:
             result = await self.provider.chat(chat_messages, max_tokens=max_tokens, temperature=temperature, **kwargs)

@@ -34,17 +34,12 @@ def get_token_encoder(encoding_name: str = "cl100k_base"):
         return None
 
 
-def count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
-    """
-    使用 tiktoken 精确计算 token 数
-    
-    Args:
-        text: 待计算的文本
-        encoding_name: 编码名称，默认 cl100k_base (GPT-4/GPT-3.5 使用)
-    
-    Returns:
-        token 数量
-    """
+# 多模态图片固定 token 估算（OpenAI 低细节图像近似值）
+_IMAGE_TOKENS_ESTIMATE = 85
+
+
+def _count_single_text(text: str, encoding_name: str = "cl100k_base") -> int:
+    """单个文本的 token 计数：tiktoken 优先，失败回退估算"""
     if not text:
         return 0
     
@@ -57,6 +52,54 @@ def count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
     
     # 回退到估算方法
     return estimate_tokens(text)
+
+
+def _count_multimodal_content(content: list, encoding_name: str = "cl100k_base") -> int:
+    """统计多模态 content（part 列表）的 token 数
+    
+    支持 ContentPart 两种常见形态：
+      - {"type": "text", "text": "..."}
+      - {"type": "image_url", "image_url": {"url": "..."}}
+    以及纯字符串 part。
+    """
+    total = 0
+    for part in content:
+        if isinstance(part, str):
+            total += _count_single_text(part, encoding_name)
+        elif isinstance(part, dict):
+            part_type = part.get("type", "")
+            if part_type == "text":
+                total += _count_single_text(part.get("text", "") or "", encoding_name)
+            elif part_type == "image_url":
+                # 图片无法逐字符计数，按固定估算值
+                total += _IMAGE_TOKENS_ESTIMATE
+            else:
+                # 未知 part 类型：兜底取 text 字段
+                text_val = part.get("text", "")
+                if text_val:
+                    total += _count_single_text(text_val, encoding_name)
+    return total
+
+
+def count_tokens(text, encoding_name: str = "cl100k_base") -> int:
+    """
+    使用 tiktoken 精确计算 token 数
+    
+    Args:
+        text: 待计算的文本；也支持多模态 part 列表（content 为 list 的场景）
+        encoding_name: 编码名称，默认 cl100k_base (GPT-4/GPT-3.5 使用)
+    
+    Returns:
+        token 数量
+    """
+    if not text:
+        return 0
+    
+    # 多模态 content（part 列表）支持
+    if isinstance(text, list):
+        return _count_multimodal_content(text, encoding_name)
+    
+    return _count_single_text(text, encoding_name)
 
 
 def estimate_input_tokens(messages: list, system_prompt: str = None) -> int:
@@ -97,7 +140,7 @@ def estimate_input_tokens(messages: list, system_prompt: str = None) -> int:
     return total
 
 
-def estimate_tokens(text: str) -> int:
+def estimate_tokens(text) -> int:
     """
     估算文本的Token数量
     使用多种语言的中文/英文混合估算方法
@@ -108,6 +151,14 @@ def estimate_tokens(text: str) -> int:
     """
     if not text:
         return 0
+    
+    # 防御：若误传入多模态 part 列表，抽取文本/图片分别估算
+    if isinstance(text, list):
+        return _count_multimodal_content(text)
+    
+    # 非文本类型防御
+    if not isinstance(text, str):
+        text = str(text)
     
     # 计算中文字符数量
     chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
@@ -278,10 +329,23 @@ class MetricsCalculator:
                 '<think>' in content.lower()
             )
             
+            opened_this_chunk = False
             if not in_think and has_think_start:
                 in_think = True
                 if not think_start_time:
                     think_start_time = timestamp
+                # 记录：本 chunk 刚打开 think，其自身不触发翻转
+                opened_this_chunk = True
+            
+            # 检测 think→answer 转换：is_think 标记从 True 变为 False
+            # 这处理了使用 reasoning_content 字段（无标签）的模型，
+            # 如 DeepSeek V3/V4，它们的 think 内容通过单独的 reasoning_content 字段传递
+            # 注意：跳过"刚打开 think 的同一 chunk"，否则标签型模型
+            # （<think> 标签、is_think=False 的 chunk 同时携带开始标记）会在
+            # 打开 think 的瞬间立即退出，导致 think 统计归零（回归）。
+            if in_think and not opened_this_chunk and not is_think and not is_think_end:
+                in_think = False
+                think_end_time = timestamp
             
             if in_think:
                 think_contents.append(content)
