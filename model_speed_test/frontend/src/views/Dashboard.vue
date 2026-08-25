@@ -542,7 +542,7 @@
                   <div class="metric-row">
                     <span class="metric-label">速度:</span>
                     <span class="metric-value">{{ subTask.metrics.speed || '--' }} t/s</span>
-                    <span class="metric-label" v-if="subTask.metrics.answerSpeed"> (Answer: {{ subTask.metrics.answerSpeed }} t/s)</span>
+                    <span class="metric-label" v-if="subTask.metrics.answerSpeed !== undefined && subTask.metrics.answerSpeed !== null && subTask.metrics.answerSpeed !== '--'"> (Answer: {{ subTask.metrics.answerSpeed }} t/s)</span>
                   </div>
                   <div class="metric-row">
                     <span class="metric-label">TTFT:</span>
@@ -553,8 +553,8 @@
                   <div class="metric-row" v-if="subTask.metrics.tokens">
                     <span class="metric-label">Tokens:</span>
                     <span class="metric-value">{{ subTask.metrics.tokens }}</span>
-                    <span class="metric-label" v-if="subTask.metrics.thinkTokens"> (Think: {{ subTask.metrics.thinkTokens }})</span>
-                    <span class="metric-label" v-if="subTask.metrics.answerTokens"> (Answer: {{ subTask.metrics.answerTokens }})</span>
+                    <span class="metric-label" v-if="subTask.metrics.thinkTokens !== undefined && subTask.metrics.thinkTokens !== null && subTask.metrics.thinkTokens !== '--'"> (Think: {{ subTask.metrics.thinkTokens }})</span>
+                    <span class="metric-label" v-if="subTask.metrics.answerTokens !== undefined && subTask.metrics.answerTokens !== null && subTask.metrics.answerTokens !== '--'"> (Answer: {{ subTask.metrics.answerTokens }})</span>
                   </div>
                   <div class="metric-row" v-if="subTask.metrics.answerTime !== undefined && subTask.metrics.answerTime !== null">
                     <span class="metric-label" v-if="subTask.metrics.thinkTime !== undefined && subTask.metrics.thinkTime !== null && subTask.metrics.thinkTime > 0">Think时间:</span>
@@ -839,6 +839,8 @@
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { marked } from 'marked'
+
+const router = useRouter()
 import TreeView from '@/components/dashboard/TreeView.vue'
 import TestSetManagerModal from '@/components/dashboard/modals/TestSetManagerModal.vue'
 import StartConfigModal from '@/components/dashboard/modals/StartConfigModal.vue'
@@ -937,6 +939,9 @@ interface SubTask {
   error?: string
   think_content?: string  // 思考内容
   answer_content?: string // 回答内容
+  input_images?: any[]    // 多模态输入图片
+  output_images?: any[]   // 多模态输出图片
+  evaluation?: any        // AI 校对结果 {is_correct, rate, reason}
 }
 
 interface Task {
@@ -947,16 +952,19 @@ interface Task {
   current_round: number
   total_rounds: number
   sub_tasks: Record<string, SubTask>
-  avgTtft?: string
-  avgTpft?: string
-  avgTokens?: string
-  avgSpeed?: string
-  avgAnswerSpeed?: string
-  avgThinkTokens?: string
-  avgAnswerTokens?: string
+  avgTtft?: string | number
+  avgTpft?: string | number
+  avgTokens?: string | number
+  avgSpeed?: string | number
+  avgAnswerSpeed?: string | number
+  avgThinkTokens?: string | number
+  avgAnswerTokens?: string | number
   expanded?: boolean  // 展开状态
   startTime?: number  // 任务开始时间（Unix 时间戳秒）
   duration?: number   // 任务总耗时（秒），任务完成后设置
+  evalIncorrectCount?: number  // 校对不通过轮次数
+  evalCorrectCount?: number    // 校对通过轮次数
+  avgEvalRate?: number         // 平均校对评分
 }
 
 const tasks = ref<Record<string, Task>>({})
@@ -1087,10 +1095,23 @@ const modelForm = reactive({
   thinking_enabled: true,
   supports_vision: false
 })
-const caseForm = reactive({
+// 用例消息：content 支持字符串（文本）或 part 列表（多模态）
+interface CaseMessage {
+  role: string
+  content: any  // string（文本）或 part 数组（多模态）
+  _mode?: 'text' | 'multipart'
+}
+const caseForm = reactive<{
+  name: string
+  messages: CaseMessage[]
+  max_tokens: number
+  expected_output: string
+  eval_model: string
+  folder_id: string | null
+}>({
   name: '',
   messages: [
-    { role: 'user', content: '' }
+    { role: 'user', content: '', _mode: 'text' }
   ],
   max_tokens: 500,
   expected_output: '',  // 标准答案（用于质量评估）
@@ -1456,6 +1477,7 @@ const expandTransition = reactive({
 })
 
 let eventSource: EventSource | null = null
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
 // ===== 计算属性 =====
 const taskCount = computed(() => Object.keys(tasks.value).length)
@@ -1664,7 +1686,7 @@ function getRoundStatusIcon(status: string, roundNum: number, totalRounds: numbe
   if (status === 'done') return '✓'
   if (status === 'error') return '✗'
   if (status === 'running') return '⟳'
-  return roundNum
+  return String(roundNum)
 }
 
 function trimText(text: string): string {
@@ -2279,7 +2301,8 @@ async function handleRenameFolder(folderId: string, name: string) {
 // 移动用例到指定文件夹
 async function handleMoveCase(caseId: string, targetFolderId: string | null) {
   try {
-    const res = await fetch(`/config/test-cases/${caseId}`, {
+    // 统一走专用 /move 端点（后端会校验文件夹存在性）
+    const res = await fetch(`/config/test-cases/${caseId}/move`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder_id: targetFolderId })
@@ -3535,9 +3558,20 @@ function connectSSE() {
   }
   
   eventSource.onerror = () => {
+    // 关键修复：EventSource 原生会自动重连，onerror 会反复触发；
+    // 必须先 close 旧实例并去重，否则多连接并存导致事件重复。
     sseConnected.value = false
     sseStatus.value = 'RETRY'
-    setTimeout(connectSSE, 3000)
+    if (eventSource) {
+      eventSource.close()
+      eventSource = null
+    }
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null
+        connectSSE()
+      }, 3000)
+    }
   }
 }
 
@@ -3724,13 +3758,13 @@ async function loadTestState() {
     const res = await fetch('/status')
     const data = await res.json()
     
-    const savedTasks = data.tasks || {}
+    const savedTasks: any = data.tasks || {}
     const taskKeys = Object.keys(savedTasks)
     
     if (taskKeys.length > 0) {
       console.log(`[State] 恢复 ${taskKeys.length} 个任务状态`)
       
-      for (const [taskId, taskData] of Object.entries(savedTasks)) {
+      for (const [taskId, taskData] of Object.entries(savedTasks) as [string, any][]) {
         const modelName = taskData.model_name
         const caseName = taskData.test_case_name
         const totalRounds = taskData.total_rounds || 10
@@ -3749,7 +3783,7 @@ async function loadTestState() {
         let doneCount = 0
         let latestRound = 0
         
-          for (const [roundKey, roundData] of Object.entries(rounds)) {
+          for (const [roundKey, roundData] of Object.entries(rounds) as [string, any][]) {
           const subId = getSubTaskId(modelName, caseName, parseInt(roundKey))
           
           // 转换 metrics 格式：后端字段名 -> 前端字段名
@@ -3859,6 +3893,11 @@ onMounted(async () => {
 onUnmounted(() => {
   if (eventSource) {
     eventSource.close()
+    eventSource = null
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
   }
 })
 </script>

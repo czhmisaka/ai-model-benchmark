@@ -98,7 +98,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import ReportPreviewModal from '../components/ReportPreviewModal.vue'
 
@@ -399,6 +399,13 @@ function deleteItem(item: any) {
 onMounted(() => {
   loadHistory()
   loadModels()
+})
+
+onUnmounted(() => {
+  // 释放图表实例，避免页面切换后 canvas/监听器泄漏
+  if (trendChart) { trendChart.dispose(); trendChart = null }
+  if (compareChart) { compareChart.dispose(); compareChart = null }
+  if (distChart) { distChart.dispose(); distChart = null }
 })
 
 // 窗口大小变化时重绘图表

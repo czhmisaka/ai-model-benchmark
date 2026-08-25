@@ -62,10 +62,11 @@ const selectedDetail = computed(() => {
   for (const id of selectedIds.value) {
     const tc = props.testCases.find(c => c.id === id)
     if (tc) {
+      const tcFolderId = tc.folder_id
       // 查找所属文件夹名
       function findFolderName(nodes: TreeNode[]): string | null {
         for (const n of nodes) {
-          if (n.folder_id === tc.folder_id) return n.name
+          if (n.folder_id === tcFolderId) return n.name
           if (n.children) {
             const found = findFolderName(n.children)
             if (found !== null) return found
