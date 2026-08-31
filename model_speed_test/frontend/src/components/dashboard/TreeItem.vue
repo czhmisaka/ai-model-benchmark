@@ -46,7 +46,7 @@ const emit = defineEmits<{
 }>()
 
 // ===== 展开/折叠状态 =====
-const localExpanded = ref(props.node._expanded ?? true)  // 默认展开，避免有内容的文件夹被隐藏
+const localExpanded = ref(props.node._expanded ?? false)  // 默认折叠（用户点击展开）
 
 const isSearchActive = computed(() => props.searchQuery.trim().length > 0)
 const isExpanded = computed(() => {
