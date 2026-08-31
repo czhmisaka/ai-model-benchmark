@@ -327,7 +327,7 @@ async def get_config():
                     "enabled": bool(row["enabled"]),
                     "expected_output": row["expected_output"] or '',
                     "eval_model": row["eval_model"] or '',
-                    "folder_id": row["folder_id"] or ''
+                    "folder_id": row["folder_id"]
                 })
             
             # 获取文件夹树形结构
@@ -983,7 +983,7 @@ async def add_test_case(test_case_data: dict):
                     "enabled": bool(row["enabled"]),
                     "expected_output": row["expected_output"] or '',
                     "eval_model": row["eval_model"] or '',
-                    "folder_id": row["folder_id"] or ''
+                    "folder_id": row["folder_id"]
                 })
             
             conn.close()
@@ -1072,7 +1072,7 @@ async def move_test_case(test_case_id: str, move_data: dict):
                     "enabled": bool(row["enabled"]),
                     "expected_output": row["expected_output"] or '',
                     "eval_model": row["eval_model"] or '',
-                    "folder_id": row["folder_id"] or ''
+                    "folder_id": row["folder_id"]
                 })
             
             # 获取文件夹树
@@ -1205,7 +1205,7 @@ async def update_test_case(test_case_id: str, test_case_data: dict):
                     "enabled": bool(row["enabled"]),
                     "expected_output": row["expected_output"] or '',
                     "eval_model": row["eval_model"] or '',
-                    "folder_id": row["folder_id"] or ''
+                    "folder_id": row["folder_id"]
                 })
             
             conn.close()
@@ -1541,7 +1541,7 @@ async def delete_test_case(test_case_id: str):
                     "enabled": bool(row["enabled"]),
                     "expected_output": row["expected_output"] or '',
                     "eval_model": row["eval_model"] or '',
-                    "folder_id": row["folder_id"] or ''
+                    "folder_id": row["folder_id"]
                 })
             
             conn.close()
@@ -2098,7 +2098,7 @@ async def start_test(request: Request):
                         "enabled": bool(row["enabled"]),
                         "expected_output": row["expected_output"] or '',
                         "eval_model": row["eval_model"] or '',
-                        "folder_id": row["folder_id"] or ''
+                        "folder_id": row["folder_id"]
                     }
                     
                     # 如果指定了 case_ids，则过滤
