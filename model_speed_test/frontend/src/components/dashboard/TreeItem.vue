@@ -27,6 +27,7 @@ const props = defineProps<{
   node: TreeNode
   depth: number
   caseItems: TestCaseWithFolder[]         // 当前文件夹下的直接用例
+  casesByFolder: Record<string, TestCaseWithFolder[]>  // 全部用例按 folder_id 索引（供递归子层级）
   selectedIds: Set<string>
   searchQuery: string
   collapsed: boolean                      // 父级面板折叠状态
@@ -45,7 +46,7 @@ const emit = defineEmits<{
 }>()
 
 // ===== 展开/折叠状态 =====
-const localExpanded = ref(props.node._expanded ?? false)
+const localExpanded = ref(props.node._expanded ?? true)  // 默认展开，避免有内容的文件夹被隐藏
 
 const isSearchActive = computed(() => props.searchQuery.trim().length > 0)
 const isExpanded = computed(() => {
@@ -222,7 +223,8 @@ function onContextMenu(event: MouseEvent, type: 'folder' | 'case' | 'empty', cas
         :key="child.folder_id"
         :node="child"
         :depth="depth + 1"
-        :case-items="child._cases || []"
+        :case-items="casesByFolder[child.folder_id] || []"
+        :cases-by-folder="casesByFolder"
         :selected-ids="selectedIds"
         :search-query="searchQuery"
         :collapsed="collapsed"

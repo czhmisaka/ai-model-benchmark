@@ -221,6 +221,7 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
         :node="folder"
         :depth="0"
         :case-items="casesByFolder[folder.folder_id] || []"
+        :cases-by-folder="casesByFolder"
         :selected-ids="selectedIds"
         :search-query="searchQuery"
         :collapsed="false"
