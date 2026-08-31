@@ -13,6 +13,9 @@ import os
 class TestDatabase:
     """测试结果数据库"""
     
+    # pytest 会收集 Test* 命名的类，标记为非测试类（数据类有 __init__）
+    __test__ = False
+    
     DB_PATH = "results/test_results.db"
     
     def __init__(self, db_path: str = None):

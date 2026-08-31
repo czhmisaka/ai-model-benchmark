@@ -3,32 +3,14 @@ import App from './App.vue'
 import router from './router'
 import './styles/variables.scss'
 import ECharts from 'vue-echarts'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart, BarChart, PieChart, RadarChart } from 'echarts/charts'
-import { 
-  GridComponent, 
-  TooltipComponent, 
-  LegendComponent,
-  TitleComponent 
-} from 'echarts/components'
-
-// 注册 ECharts 组件
-use([
-  CanvasRenderer,
-  LineChart,
-  BarChart,
-  PieChart,
-  RadarChart,
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-  TitleComponent
-])
+import { echarts } from './utils/echarts'
 
 const app = createApp(App)
 
 app.use(router)
 app.component('v-chart', ECharts)
+
+// 确保 echarts 树摇后仍注册（vue-echarts 内部使用同一实例）
+void echarts
 
 app.mount('#app')

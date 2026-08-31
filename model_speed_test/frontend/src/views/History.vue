@@ -99,7 +99,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import * as echarts from 'echarts'
+import { echarts } from '@/utils/echarts'
 
 const history = ref<any[]>([])
 const search = ref('')

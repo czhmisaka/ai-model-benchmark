@@ -1601,6 +1601,38 @@ def create_stop_event() -> asyncio.Event:
     _stop_event = asyncio.Event()
     return _stop_event
 
+def _find_analysis_model_config(model_name: str) -> dict:
+    """查找 AI 分析模型的配置（独立函数，供 ai_analysis 调用）
+
+    Returns:
+        模型配置 dict；找不到时返回 None（调用方决定兜底策略）
+    """
+    import sqlite3
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+
+    if model_name:
+        try:
+            conn = sqlite3.connect(str(config_db_path))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name, provider, endpoint, api_key, model FROM models WHERE name = ?",
+                (model_name,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "name": row["name"],
+                    "provider": row["provider"] or "openai",
+                    "endpoint": row["endpoint"],
+                    "api_key": row["api_key"],
+                    "model": row["model"],
+                }
+        except Exception:
+            pass  # 查找失败则回退到默认
+    return None
+
+
 @app.get("/api/analysis")
 async def ai_analysis(request: Request):
     """
@@ -1618,48 +1650,22 @@ async def ai_analysis(request: Request):
     # 先重新加载状态
     test_emitter.reload_state()
     
-    # --- 查找分析模型的配置 ---
-    import sqlite3
-    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
-    
-    ai_model_config = None
-    if model_name:
-        try:
-            conn = sqlite3.connect(str(config_db_path))
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name, provider, endpoint, api_key, model FROM models WHERE name = ?",
-                (model_name,)
-            )
-            row = cursor.fetchone()
-            if row:
-                ai_model_config = {
-                    "name": row["name"],
-                    "provider": row["provider"] or "openai",
-                    "endpoint": row["endpoint"],
-                    "api_key": row["api_key"],
-                    "model": row["model"]
-                }
-            conn.close()
-        except Exception as e:
-            pass  # 查找失败则回退到默认
-    
-    # 未指定或未找到时使用 MiniMax 兜底
-    use_minimax_fallback = False
+    # --- 查找分析模型的配置（已提取为独立函数）---
+    ai_model_config = _find_analysis_model_config(model_name)
     if not ai_model_config:
         minimax_key = os.environ.get("MINIMAX_API_KEY", "")
         if minimax_key:
-            use_minimax_fallback = True
             model_name = "MiniMax-M2.7"
             ai_model_config = {
                 "name": "MiniMax-M2.7",
                 "provider": "minimax",
                 "endpoint": "https://api.minimaxi.com/v1/text/chatcompletion_v2",
                 "api_key": minimax_key,
-                "model": "MiniMax-M2.7"
+                "model": "MiniMax-M2.7",
             }
-    
+        else:
+            raise AppError(400, "未找到可用的分析模型（请指定 model_name 或配置 MINIMAX_API_KEY）")
+
     async def event_generator():
         try:
             # Step 1: 收集所有测评任务数据

@@ -299,12 +299,12 @@ class MetricsCalculator:
         # 首Token时间 (TTFT)
         if timestamps:
             first_timestamp = timestamps[0]
-            metrics.ttft = first_timestamp - start_time
+            metrics.ttft = max(0, first_timestamp - start_time)
         
         # 总时间
         if timestamps:
             last_timestamp = timestamps[-1]
-            metrics.total_time = last_timestamp - start_time
+            metrics.total_time = max(0, last_timestamp - start_time)
         
         # TPFT = 总时间 - 首Token时间
         metrics.tpft = max(0, metrics.total_time - metrics.ttft)

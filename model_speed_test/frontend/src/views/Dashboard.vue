@@ -1386,6 +1386,36 @@ const expandTransition = reactive({
 let eventSource: EventSource | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
+// ===== SSE chunk 批量渲染缓冲 =====
+// 每个 chunk 直接写响应式对象会触发重渲染，大输出时明显卡顿。
+// 先写入非响应式缓冲，80ms 批量 flush 到 tasks。
+const chunkBuffer = new Map<string, string>()  // key: taskId||subTaskId -> content
+let chunkFlushTimer: ReturnType<typeof setTimeout> | null = null
+const CHUNK_FLUSH_INTERVAL = 80
+
+function bufferChunk(taskId: string, subTaskId: string, content: string) {
+  const key = taskId + '||' + subTaskId
+  chunkBuffer.set(key, (chunkBuffer.get(key) || '') + content)
+  if (!chunkFlushTimer) {
+    chunkFlushTimer = setTimeout(flushChunkBuffer, CHUNK_FLUSH_INTERVAL)
+  }
+}
+
+function flushChunkBuffer() {
+  chunkFlushTimer = null
+  if (chunkBuffer.size === 0) return
+  for (const [key, content] of chunkBuffer) {
+    const sep = key.indexOf('||')
+    const taskId = key.slice(0, sep)
+    const subTaskId = key.slice(sep + 2)
+    const task = tasks.value[taskId]
+    if (task && task.sub_tasks[subTaskId]) {
+      task.sub_tasks[subTaskId].output += content
+    }
+  }
+  chunkBuffer.clear()
+}
+
 // ===== 计算属性 =====
 const taskCount = computed(() => Object.keys(tasks.value).length)
 
@@ -1451,18 +1481,34 @@ function getFontSize(totalRounds: number): string {
 // 实时更新时间
 const now = ref(Date.now() / 1000)
 let timer: number | null = null
+let currentTimerInterval = 1000  // 当前定时器间隔（运行中任务 1s，空闲 30s）
 
 onMounted(() => {
-  // 每秒更新时间
-  timer = window.setInterval(() => {
+  // 智能节流定时器：有运行中任务时每秒更新（任务计时需要），
+  // 否则降频到 30s（仅维持 now 时钟，避免全量卡片重渲染）
+  const tick = () => {
     now.value = Date.now() / 1000
-  }, 1000)
+    const hasRunning = Object.values(tasks.value).some(t => t.status === 'running')
+    const targetInterval = hasRunning ? 1000 : 30000
+    if (targetInterval !== currentTimerInterval) {
+      currentTimerInterval = targetInterval
+      if (timer) window.clearInterval(timer)
+      timer = window.setInterval(tick, targetInterval)
+    }
+  }
+  timer = window.setInterval(tick, currentTimerInterval)
 })
 
 onUnmounted(() => {
   if (timer) {
     clearInterval(timer)
   }
+  // 清理 chunk 缓冲定时器
+  if (chunkFlushTimer) {
+    clearTimeout(chunkFlushTimer)
+    chunkFlushTimer = null
+  }
+  chunkBuffer.clear()
   // 清理所有 document 级事件监听器（防止拖拽/缩放进行中组件卸载时泄漏）
   document.removeEventListener('mousemove', onDrag)
   document.removeEventListener('mouseup', stopDrag)
@@ -3304,11 +3350,14 @@ function handleEvent(event: any) {
       
     case 'chunk':
       if (subTaskId && taskId && tasks.value[taskId] && tasks.value[taskId].sub_tasks[subTaskId]) {
-        tasks.value[taskId].sub_tasks[subTaskId].output += data.content
+        // 批量缓冲渲染：避免每 chunk 触发响应式重渲染
+        bufferChunk(taskId, subTaskId, data.content)
       }
       break
       
     case 'complete':
+      // 兜底：flush 该任务残留的 chunk 缓冲，确保输出完整
+      flushChunkBuffer()
       console.log('[complete event] prompt:', data.prompt, 'response length:', data.response?.length)
       if (taskId && tasks.value[taskId] && subTaskId && tasks.value[taskId].sub_tasks[subTaskId]) {
         tasks.value[taskId].sub_tasks[subTaskId].status = data.success ? 'done' : 'error'
