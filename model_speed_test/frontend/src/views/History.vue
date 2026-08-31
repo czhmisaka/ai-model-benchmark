@@ -400,13 +400,17 @@ function exportAll() {
 
 async function deleteItem(item: any) {
   if (!(await dialogConfirm('确定删除此测试记录吗？', { title: '删除测试记录', danger: true, confirmText: '删除' }))) return
-  fetch(`/api/history/${item.group_id}`, { method: 'DELETE' })
-    .then(res => res.json())
-    .then(data => {
-      if (data.success) {
-        history.value = history.value.filter(h => h.group_id !== item.group_id)
-      }
-    })
+  try {
+    const res = await fetch(`/api/history/${item.group_id}`, { method: 'DELETE' })
+    const data = await res.json()
+    if (data.success) {
+      history.value = history.value.filter(h => h.group_id !== item.group_id)
+    } else {
+      console.error('delete failed:', data)
+    }
+  } catch (e) {
+    console.error('delete request failed:', e)
+  }
 }
 
 onMounted(() => {

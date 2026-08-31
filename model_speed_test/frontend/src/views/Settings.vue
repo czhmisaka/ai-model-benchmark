@@ -95,7 +95,8 @@ function removeModel(index: number) {
 
 function saveSettings() {
   localStorage.setItem('app_settings', JSON.stringify(settings))
-  alert('设置已保存')
+  savedFeedback.saved = true
+  setTimeout(() => { savedFeedback.saved = false }, 1500)
 }
 
 async function resetSettings() {

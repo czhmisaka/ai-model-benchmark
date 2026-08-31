@@ -847,6 +847,17 @@ import AppDialog from '@/components/common/AppDialog.vue'
 
 const router = useRouter()
 const { confirm: dialogConfirm, prompt: dialogPrompt } = useDialog()
+
+// 带超时的 fetch（防止后端挂起时 UI 无限等待）
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 15000): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...options, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
 import TreeView from '@/components/dashboard/TreeView.vue'
 import TestSetManagerModal from '@/components/dashboard/modals/TestSetManagerModal.vue'
 import StartConfigModal from '@/components/dashboard/modals/StartConfigModal.vue'
@@ -2354,7 +2365,7 @@ async function submitModal() {
     const result = await res.json()
     if (result.error) showToast(result.error, 'error')
     else {
-      showToast('Model updated', 'success')
+      showToast('模型已更新', 'success')
       config.value.models = result.models
       
       // 如果名称改变了，需要更新选中状态
@@ -2389,7 +2400,7 @@ async function submitModal() {
     const result = await res.json()
     if (result.error) showToast(result.error, 'error')
     else {
-      showToast('Test case updated', 'success')
+      showToast('用例已更新', 'success')
       config.value.test_cases = result.test_cases
       hideModal()
     }
@@ -2408,7 +2419,7 @@ async function submitModal() {
       extra_params: { supports_vision: !!modelForm.supports_vision }
     }
     if (!data.name || !data.endpoint || !data.model) {
-      showToast('Please fill all fields', 'error')
+      showToast('请填写所有必填字段', 'error')
       return
     }
     const res = await fetch('/config/models', {
@@ -2419,7 +2430,7 @@ async function submitModal() {
     const result = await res.json()
     if (result.error) showToast(result.error, 'error')
     else {
-      showToast('Model added', 'success')
+      showToast('模型已添加', 'success')
       config.value.models = result.models
       hideModal()
     }
@@ -2446,7 +2457,7 @@ async function submitModal() {
       return msg.content && msg.content.trim()
     })
     if (!data.name || !hasContent) {
-      showToast('Please fill all fields', 'error')
+      showToast('请填写所有必填字段', 'error')
       return
     }
     const res = await fetch('/config/test-cases', {
@@ -2457,7 +2468,7 @@ async function submitModal() {
     const result = await res.json()
     if (result.error) showToast(result.error, 'error')
     else {
-      showToast('Test case added', 'success')
+      showToast('用例已添加', 'success')
       config.value.test_cases = result.test_cases
       hideModal()
     }
@@ -2465,29 +2476,29 @@ async function submitModal() {
 }
 
 async function deleteModel(name: string) {
-            if (!(await dialogConfirm(`Delete "${name}"?`, { title: "Delete Model", danger: true, confirmText: "Delete" }))) return
+            if (!(await dialogConfirm(`Delete "${name}"?`, { title: "删除模型", danger: true, confirmText: "删除" }))) return
   const res = await fetch(`/config/models/${encodeURIComponent(name)}`, { method: 'DELETE' })
   const result = await res.json()
   config.value.models = result.models
   selectedModels.value.delete(name)
   localStorage.setItem('selectedModels', JSON.stringify([...selectedModels.value]))
-  showToast('Deleted', 'success')
+  showToast('已删除', 'success')
 }
 
 async function deleteCase(id: string) {
-  if (!(await dialogConfirm('Delete this case?', { title: 'Delete Case', danger: true, confirmText: 'Delete' }))) return
+  if (!(await dialogConfirm('Delete this case?', { title: '删除用例', danger: true, confirmText: '删除' }))) return
   const res = await fetch(`/config/test-cases/${id}`, { method: 'DELETE' })
   const result = await res.json()
   config.value.test_cases = result.test_cases
   selectedCases.value.delete(id)
   localStorage.setItem('selectedCases', JSON.stringify([...selectedCases.value]))
-  showToast('Deleted', 'success')
+  showToast('已删除', 'success')
 }
 
 // 启动配置
 function showStartConfig() {
   if (selectedModels.value.size === 0 || selectedCases.value.size === 0) {
-    showToast('Select at least one model and test case', 'error')
+    showToast('请至少选择一个模型和一个测试用例', 'error')
     return
   }
   startConfigVisible.value = true
@@ -2511,7 +2522,7 @@ async function confirmStartTest() {
   console.log('[Start] Config:', startConfig)
   
   try {
-    const res = await fetch('/test/start', {
+    const res = await fetchWithTimeout('/test/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2544,23 +2555,23 @@ async function confirmStartTest() {
       addLog(new Date().toLocaleTimeString(), 'START', `${models.length} models × ${cases.length} cases (${rounds} rounds each) [concurrency: ${concurrency ? 'ON' : 'OFF'}]`)
     }
     
-    showToast('Test started', 'success')
+    showToast('测试已启动', 'success')
     testRunning.value = true
     testStatus.value = 'RUNNING'
   } catch (e) {
     console.error('[Start] Error:', e)
-    showToast('Failed to start', 'error')
+    showToast('启动失败', 'error')
   }
 }
 
 async function stopTest() {
   try {
-    await fetch('/test/stop', { method: 'POST' })
-    showToast('Test stopped', 'success')
+    await fetchWithTimeout('/test/stop', { method: 'POST' }, 25000)
+    showToast('测试已停止', 'success')
     testRunning.value = false
     testStatus.value = 'STOPPED'
   } catch (e) {
-    showToast('Failed to stop', 'error')
+    showToast('停止失败', 'error')
   }
 }
 
@@ -2576,7 +2587,7 @@ async function clearTest() {
   
   testRunning.value = false
   testStatus.value = 'IDLE'
-  showToast('Cleared', 'success')
+  showToast('已清空', 'success')
 }
 
 // 单任务控制
