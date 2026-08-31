@@ -918,7 +918,8 @@ async def run_tests_with_web(
     config: Dict[str, Any],
     test_cases: List[Dict[str, Any]] = None,
     enable_web: bool = True,
-    stop_event: asyncio.Event = None
+    stop_event: asyncio.Event = None,
+    case_semaphore: asyncio.Semaphore = None
 ):
     """运行测试 - 支持 Web 推送"""
     from datetime import datetime
@@ -1053,6 +1054,10 @@ async def run_tests_with_web(
 
     # 获取最大并发数
     max_concurrent = conc_config.get("max_concurrent", 3)
+    # 用例级并发信号量：限制同一时刻正在执行的请求总数
+    # （web/app.py 会传入跨模型共享的信号量；CLI 直调时自建）
+    if case_semaphore is None:
+        case_semaphore = asyncio.Semaphore(max(1, int(max_concurrent)))
     
     # 遍历每个模型，并发执行所有测试用例
     for client in clients:
@@ -1075,16 +1080,18 @@ async def run_tests_with_web(
                 thinking_enabled=client_model.get("thinking_enabled", True)
             )
             try:
-                if enable_web:
-                    # 传递 test_case 中的校对配置（eval_model 名称）给 web_tester
-                    results = await web_tester.run_single_test_with_events(
-                        test_client, recorder, test_case, rounds, interval
-                    )
-                else:
-                    result = await run_single_test(
-                        test_client, recorder, test_case, rounds, interval
-                    )
-                    results = [result]
+                # 并发度控制：同一时刻最多 max_concurrent 个用例在执行
+                async with case_semaphore:
+                    if enable_web:
+                        # 传递 test_case 中的校对配置（eval_model 名称）给 web_tester
+                        results = await web_tester.run_single_test_with_events(
+                            test_client, recorder, test_case, rounds, interval
+                        )
+                    else:
+                        result = await run_single_test(
+                            test_client, recorder, test_case, rounds, interval
+                        )
+                        results = [result]
                 return results
             finally:
                 # 确保关闭客户端

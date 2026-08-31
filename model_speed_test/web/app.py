@@ -2241,18 +2241,23 @@ async def start_test(request: Request):
             except RuntimeError:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-            
+
+            # 跨模型共享并发信号量：所有模型的在途请求总数受 max_concurrent 约束
+            max_conc = int((config.get("concurrency", {}) or {}).get("max_concurrent", 3) or 3)
+            shared_semaphore = asyncio.Semaphore(max(1, max_conc))
+
             # 为每个 (model, test_case) 组合创建独立任务
             tasks = []
             for client in clients:
                 # 每个模型独立运行所有测试用例
                 task = loop.create_task(
                     run_tests_with_web(
-                        [client], 
-                        config, 
-                        test_cases, 
-                        enable_web=True, 
-                        stop_event=stop_event
+                        [client],
+                        config,
+                        test_cases,
+                        enable_web=True,
+                        stop_event=stop_event,
+                        case_semaphore=shared_semaphore
                     )
                 )
                 tasks.append(task)
