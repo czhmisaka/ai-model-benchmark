@@ -14,7 +14,7 @@
 #### main.py
 - [ ] print 输出 94 处（生产应统一 logging + 级别控制）
 - [ ] 巨型函数：_run_stream_test_with_events（397行）、run_tests_with_web（261行）、run_concurrent_tests（110行）、main（120行）
-- [ ] 裸 except 2 处
+- [x] 裸 except 2 处 已完成
 
 #### web/app.py
 - [ ] 巨型函数：ai_analysis 加 event_generator（合计660行）、start_test 加 run_test（600行）、update_test_case（126行）、get_config（129行）
@@ -41,9 +41,9 @@
 
 ### 功能配置问题（影响评测效果）
 
-- [ ] 官方 553 题全部未配 eval_model（校对模型）：跑官方题时跳过 AI 校对，看不到正确率/rate。修复：导入脚本增加自动配置 eval_model 选项，或提供批量配置端点
-- [ ] 海底捞针题 max_tokens=-1（不限制）配长文档时部分模型输出超长回答，建议 1024
-- [ ] GET /config 响应 9MB（553题完整 messages 含60万字符捞针文档全部下发）导致前端加载慢。修复：列表端点剥离 messages 全文
+- [x] 官方 553 题全部未配 eval_model 已完成（校对模型）：跑官方题时跳过 AI 校对，看不到正确率/rate。修复：导入脚本增加自动配置 eval_model 选项，或提供批量配置端点
+- [x] 海底捞针题 max_tokens=-1 已完成（不限制）配长文档时部分模型输出超长回答，建议 1024
+- [x] GET /config 响应 9MB 已完成（553题完整 messages 含60万字符捞针文档全部下发）导致前端加载慢。修复：列表端点剥离 messages 全文
 
 ### 前端（33 个源文件扫描完成）
 
@@ -51,7 +51,7 @@
 - [ ] any 类型 44 处（集中在 Dashboard SSE 处理和任务卡）
 - [ ] console.log 残留 12 处
 - [ ] Dashboard.vue 7373 行（技术债，维持）
-- [ ] TestRun.vue（795行）：功能全坏演示页，无导航入口但路由可达，建议从路由移除
+- [x] TestRun.vue 已完成（795行）：功能全坏演示页，无导航入口但路由可达，建议从路由移除
 
 ### 检查过确认正常的功能
 
