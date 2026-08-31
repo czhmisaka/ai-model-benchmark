@@ -16,6 +16,19 @@ ROOT = Path(__file__).parent.parent
 BANK_FILE = ROOT / "config" / "zx_style_benchmark.json"
 DB_FILE = ROOT / "results" / "config.db"
 
+# 维度 -> 文件夹显示名
+DIM_LABELS = {
+    "math": "数学推理",
+    "hallucination": "幻觉抵抗",
+    "safety": "安全权限",
+    "extraction": "数据抽取",
+    "structured": "结构化输出",
+    "instruction": "指令遵循",
+    "agent": "智能体工作流",
+    "coding": "编程",
+}
+ROOT_FOLDER_NAME = "zx评测题库"
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -39,6 +52,32 @@ def main():
     conn = sqlite3.connect(str(DB_FILE))
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
+
+    # ===== 题库文件夹结构（幂等创建） =====
+    folder_map = {}  # dimension -> folder_id
+
+    def _ensure_folder(name, parent_id=None):
+        """确保文件夹存在（同级同名防重），返回 folder_id"""
+        cursor.execute(
+            "SELECT folder_id FROM test_case_folders WHERE name = ? AND COALESCE(parent_id, '') = COALESCE(?, '')",
+            (name, parent_id)
+        )
+        row = cursor.fetchone()
+        if row:
+            return row["folder_id"]
+        import uuid as _uuid
+        fid = str(_uuid.uuid4())
+        cursor.execute(
+            "INSERT INTO test_case_folders (folder_id, name, parent_id, sort_order) VALUES (?, ?, ?, 0)",
+            (fid, name, parent_id)
+        )
+        return fid
+
+    root_fid = _ensure_folder(ROOT_FOLDER_NAME, None)
+    for dim in meta.get("dimensions", {}).keys():
+        folder_map[dim] = _ensure_folder(DIM_LABELS.get(dim, dim), root_fid)
+    conn.commit()
+    print(f"文件夹结构就绪: root={root_fid[:8]}, {len(folder_map)} 个维度子文件夹")
 
     inserted, updated, skipped = 0, 0, 0
     for c in cases:
@@ -78,10 +117,11 @@ def main():
                 """UPDATE test_cases SET name=?, type=?, description=?, tags=?, version=?,
                    system_prompt=?, messages=?, expected_output_type=?, metadata=?,
                    max_tokens=?, temperature=?, stream=?, enabled=?, expected_output=?,
-                   updated_at=datetime('now','localtime')
+                   folder_id=?, updated_at=datetime('now','localtime')
                    WHERE case_id=?""",
                 (row[1], row[2], row[3], row[4], row[5], row[8], row[9],
-                 row[10], row[11], row[12], row[13], row[14], row[15], row[16], case_id)
+                 row[10], row[11], row[12], row[13], row[14], row[15], row[16],
+                 folder_map.get(c.get("metadata", {}).get("dimension", ""), None), case_id)
             )
             updated += 1
         else:
@@ -89,9 +129,9 @@ def main():
                 """INSERT INTO test_cases (case_id, name, type, description, tags, version,
                    prompt_template, variables, system_prompt, messages, expected_output_type,
                    metadata, max_tokens, temperature, stream, enabled, expected_output,
-                   eval_model, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'now','now')""",
-                row
+                   eval_model, folder_id, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'now','now')""",
+                row + (folder_map.get(c.get("metadata", {}).get("dimension", ""), None),)
             )
             inserted += 1
 
