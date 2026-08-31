@@ -242,7 +242,7 @@
                 <span class="eval-incorrect">✗ {{ task.evalIncorrectCount || 0 }}</span>
                 <span class="eval-divider">|</span>
                 <span class="eval-accuracy">{{ getEvalAccuracy(task) }}%</span>
-              </template>
+</template>
               <template v-else>
                 <span class="eval-placeholder-text">无校对数据</span>
               </template>
@@ -833,14 +833,20 @@
       </div>
     </div>
   </div>
+  <AppDialog />
   </template>
+
+  <AppDialog />
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { marked } from 'marked'
+import { useDialog } from '@/composables/useDialog'
+import AppDialog from '@/components/common/AppDialog.vue'
 
 const router = useRouter()
+const { confirm: dialogConfirm, prompt: dialogPrompt } = useDialog()
 import TreeView from '@/components/dashboard/TreeView.vue'
 import TestSetManagerModal from '@/components/dashboard/modals/TestSetManagerModal.vue'
 import StartConfigModal from '@/components/dashboard/modals/StartConfigModal.vue'
@@ -2023,7 +2029,10 @@ function showManagerModal() {
 
 // 从管理弹窗创建文件夹
 async function handleCreateFolder(name: string, parentId: string | null) {
-  const folderName = (name || '').trim() || prompt('请输入文件夹名称：')?.trim()
+  let folderName = (name || '').trim()
+  if (!folderName) {
+    folderName = (await dialogPrompt('请输入文件夹名称：', { title: '新建文件夹' }))?.trim() || ''
+  }
   if (!folderName) return
   try {
     const res = await fetch('/config/test-case-folders', {
@@ -2078,7 +2087,7 @@ async function handleRenameFolder(folderId: string, name: string) {
     }
     currentName = find(config.value?.folders || [])
   }
-  const newName = name || prompt('请输入新文件夹名称：', currentName)
+  const newName = name || await dialogPrompt('请输入新文件夹名称：', { title: '重命名文件夹', inputValue: currentName })
   if (!newName || !newName.trim()) return
   try {
     const res = await fetch(`/config/test-case-folders/${folderId}`, {
@@ -2099,7 +2108,7 @@ async function handleRenameFolder(folderId: string, name: string) {
 }
 
 // 弹出文件夹选择器（返回 folder_id；null=移到根目录；undefined=用户取消）
-function promptSelectFolder(): string | null | undefined {
+async function promptSelectFolder(): Promise<string | null | undefined> {
   const folders = (config.value?.folders || []) as any[]
   // 扁平化文件夹列表
   const flat: { id: string; label: string }[] = []
@@ -2113,14 +2122,15 @@ function promptSelectFolder(): string | null | undefined {
 
   if (!flat.length) {
     // 无文件夹：确认是否移到根目录
-    return confirm('当前没有文件夹，是否将用例移到未分类（根目录）？') ? null : undefined
+    const ok = await dialogConfirm('当前没有文件夹，是否将用例移到未分类（根目录）？', { title: '移动用例' })
+    return ok ? null : undefined
   }
 
   const menu = flat.map((f, i) => `${i + 1}. ${f.label}`).join('\n')
-  const input = prompt(
+  const input = await dialogPrompt(
     `选择目标文件夹（输入序号）：\n0. 未分类（根目录）\n${menu}\n\n取消 = 放弃移动`,
-    '0'
-  )
+    { title: '移动到…', inputValue: '0' })
+
   if (input === null) return undefined  // 用户取消
   const idx = parseInt(input, 10)
   if (isNaN(idx) || idx < 0 || idx > flat.length) {
@@ -2135,7 +2145,7 @@ async function handleMoveCase(caseId: string, targetFolderId: string | null) {
   // 右键菜单/旧逻辑传入空串表示"需选择目标"，弹出选择器；
   // 空串直接发送会被后端按原样写入 DB（'' ≠ NULL，导致用例从树中"消失"）
   if (targetFolderId === '' as any) {
-    const selected = promptSelectFolder()
+    const selected = await promptSelectFolder()
     if (selected === undefined) return  // 用户取消
     targetFolderId = selected
   }
@@ -2160,7 +2170,7 @@ async function handleMoveCase(caseId: string, targetFolderId: string | null) {
 
 // 删除文件夹
 async function handleDeleteFolder(folderId: string) {
-  if (!confirm('删除此文件夹？子文件夹也会被删除，用例将移回未分类。')) return
+  if (!(await dialogConfirm('删除此文件夹？子文件夹也会被删除，用例将移回未分类。', { title: '删除文件夹', danger: true, confirmText: '删除' }))) return
   try {
     const res = await fetch(`/config/test-case-folders/${folderId}`, { method: 'DELETE' })
     if (res.ok) {
@@ -2271,7 +2281,7 @@ function normalizeMessageModes() {
 }
 
 // 切换消息内容形态（文本 <-> 多模态）。切回文本时如有图片 part，弹确认避免误丢。
-function onMsgModeChange(msg: any) {
+async function onMsgModeChange(msg: any) {
   if (msg._mode === 'multipart') {
     const text = typeof msg.content === 'string' ? msg.content : ''
     msg.content = text ? [{ type: 'text', text }] : []
@@ -2279,7 +2289,7 @@ function onMsgModeChange(msg: any) {
     if (Array.isArray(msg.content)) {
       const hasImage = msg.content.some((p: any) => p.type === 'image_url')
       if (hasImage) {
-        const ok = confirm('切换为纯文本模式将丢弃所有图片分块。是否继续？')
+        const ok = await dialogConfirm('切换为纯文本模式将丢弃所有图片分块。是否继续？', { title: '切换内容形态', danger: true })
         if (!ok) {
           // 取消切换，恢复 multipart 模式
           msg._mode = 'multipart'
@@ -2455,7 +2465,7 @@ async function submitModal() {
 }
 
 async function deleteModel(name: string) {
-  if (!confirm(`Delete "${name}"?`)) return
+            if (!(await dialogConfirm(`Delete "${name}"?`, { title: "Delete Model", danger: true, confirmText: "Delete" }))) return
   const res = await fetch(`/config/models/${encodeURIComponent(name)}`, { method: 'DELETE' })
   const result = await res.json()
   config.value.models = result.models
@@ -2465,7 +2475,7 @@ async function deleteModel(name: string) {
 }
 
 async function deleteCase(id: string) {
-  if (!confirm('Delete this case?')) return
+  if (!(await dialogConfirm('Delete this case?', { title: 'Delete Case', danger: true, confirmText: 'Delete' }))) return
   const res = await fetch(`/config/test-cases/${id}`, { method: 'DELETE' })
   const result = await res.json()
   config.value.test_cases = result.test_cases
@@ -3288,7 +3298,7 @@ async function viewHistoryDetail(groupId: string) {
 }
 
 async function deleteHistory(groupId: string) {
-  if (!confirm('确定删除此测试记录吗？')) return
+  if (!(await dialogConfirm('确定删除此测试记录吗？', { title: '删除测试记录', danger: true, confirmText: '删除' }))) return
   
   try {
     const res = await fetch(`/api/history/${groupId}`, { method: 'DELETE' })

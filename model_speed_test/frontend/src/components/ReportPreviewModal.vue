@@ -46,12 +46,25 @@
         </div>
       </div>
     </div>
+
+    <div class="rpm-toast" :class="[toastType, { show: toastVisible }]">{{ toastMessage }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { marked } from 'marked'
+
+// 轻量 toast
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
+function showToast(msg: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = msg
+  toastType.value = type
+  toastVisible.value = true
+  setTimeout(() => { toastVisible.value = false }, 2500)
+}
 
 const props = defineProps<{
   visible: boolean
@@ -140,7 +153,7 @@ async function exportMarkdown() {
     }
   } catch (e) {
     console.error('导出 Markdown 失败:', e)
-    alert('导出 Markdown 失败，请重试')
+    showToast('导出 Markdown 失败，请重试', 'error')
   }
 }
 
@@ -151,7 +164,7 @@ function exportExcel() {
 function copyLink() {
   const url = `${window.location.origin}/report/${props.groupId}`
   navigator.clipboard.writeText(url)
-  alert('分享链接已复制到剪贴板')
+  showToast('分享链接已复制到剪贴板', 'success')
 }
 
 function close() {
@@ -352,4 +365,24 @@ watch(() => props.visible, (val) => {
   font-weight: 600;
   color: var(--primary);
 }
+
+.rpm-toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-20px);
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  opacity: 0;
+  transition: all 0.25s;
+  pointer-events: none;
+  z-index: 10001;
+  background: #10b981;
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+
+.rpm-toast.error { background: #dc2626; }
+.rpm-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 </style>

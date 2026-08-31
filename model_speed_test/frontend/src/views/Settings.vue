@@ -57,7 +57,7 @@
     </div>
     
     <div class="settings-actions">
-      <button @click="saveSettings" class="btn-primary">保存设置</button>
+      <button @click="saveSettings" class="btn-primary">{{ savedFeedback.saved ? '已保存 ✓' : '保存设置' }}</button>
       <button @click="resetSettings" class="btn-secondary">重置</button>
     </div>
   </div>
@@ -65,6 +65,11 @@
 
 <script setup lang="ts">
 import { reactive } from 'vue'
+import { useDialog } from '@/composables/useDialog'
+
+const { confirm: dialogConfirm } = useDialog()
+
+const savedFeedback = reactive({ saved: false })
 
 const settings = reactive({
   apiKey: '',
@@ -93,8 +98,8 @@ function saveSettings() {
   alert('设置已保存')
 }
 
-function resetSettings() {
-  if (confirm('确定要重置所有设置吗？')) {
+async function resetSettings() {
+  if (await dialogConfirm('确定要重置所有设置吗？', { title: '重置设置', danger: true, confirmText: '重置' })) {
     settings.apiKey = ''
     settings.endpoint = 'https://api.minimax.chat'
     settings.models = [

@@ -100,6 +100,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { echarts } from '@/utils/echarts'
+import { useDialog } from '@/composables/useDialog'
 
 const history = ref<any[]>([])
 const search = ref('')
@@ -121,6 +122,7 @@ let compareChart: echarts.ECharts | null = null
 let distChart: echarts.ECharts | null = null
 // 图表渲染延迟定时器（快速切换分组时取消旧的渲染，防止竞态）
 let renderTimer: ReturnType<typeof setTimeout> | null = null
+const { confirm: dialogConfirm } = useDialog()
 const RENDER_DELAY = 100
 
 // 加载历史数据
@@ -396,8 +398,8 @@ function exportAll() {
   }
 }
 
-function deleteItem(item: any) {
-  if (!confirm('确定删除此测试记录吗？')) return
+async function deleteItem(item: any) {
+  if (!(await dialogConfirm('确定删除此测试记录吗？', { title: '删除测试记录', danger: true, confirmText: '删除' }))) return
   fetch(`/api/history/${item.group_id}`, { method: 'DELETE' })
     .then(res => res.json())
     .then(data => {
