@@ -106,10 +106,10 @@ function handleToggleFolder(folderId: string) {
   selectedFolderId.value = folderId
 }
 
-function handleAddFolder() {
+function handleAddFolder(parentFolderId: string | null = null) {
   const name = prompt('请输入文件夹名称：')
   if (name && name.trim()) {
-    emit('create-folder', name.trim(), null)
+    emit('create-folder', name.trim(), parentFolderId)
   }
 }
 
@@ -357,6 +357,24 @@ function close() {
   max-width: 900px;
   height: 75vh;
   display: flex;
+  /* 白底弹窗内的深色主题变量覆盖：
+     内嵌 TreeView/TreeItem 使用 --gray-* 体系（默认为深色主题的浅色文字），
+     在白底上 gray-400/500 级别的浅色文字不可见。此处局部重定义为白底可读的深色值。 */
+  --gray-900: #1a202c;
+  --gray-800: #2d3748;
+  --gray-700: #4a5568;
+  --gray-600: #4a5568;
+  --gray-500: #718096;
+  --gray-400: #a0aec0;
+  --gray-300: #cbd5e0;
+  --gray-200: #e2e8f0;
+  --gray-100: #edf2f7;
+  --gray-50: #f7fafc;
+  --white: #ffffff;
+  --black: #1a202c;
+  --primary: #2563eb;
+  --primary-dim: rgba(37, 99, 235, 0.1);
+  --primary-light: #3b82f6;
   flex-direction: column;
   overflow: hidden;
 }

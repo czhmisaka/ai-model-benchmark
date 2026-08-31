@@ -100,7 +100,7 @@
             @toggle-case="toggleCase"
             @select-all="selectAllCases"
             @deselect-all="deselectAllCases"
-            @add-folder="showManagerModal"
+            @add-folder="(parentId) => handleCreateFolder('', parentId)"
             @add-case="showModal('case')"
             @rename-folder="handleRenameFolder"
             @move-case="handleMoveCase"
@@ -1659,8 +1659,14 @@ function checkCollapseState(width: number, fromCollapsed: boolean) {
   }
 }
 
-function onDrag(_e: MouseEvent) {
+function onDrag(e: MouseEvent) {
   if (!isDragging.value) return
+  const newWidth = e.clientX
+  // 限制最小和最大宽度
+  const maxWidth = window.innerWidth - 300
+  // 如果正在折叠状态，使用折叠宽度作为最小值
+  const actualMinWidth = isCollapsed.value ? COLLAPSED_WIDTH : 60
+  sidebarWidth.value = Math.max(actualMinWidth, Math.min(maxWidth, newWidth))
 }
 
 function stopDrag() {
@@ -2057,7 +2063,22 @@ async function closeManagerModal() {
 
 // 文件夹重命名
 async function handleRenameFolder(folderId: string, name: string) {
-  const newName = name || prompt('请输入新文件夹名称：')
+  // 预填当前文件夹名称（name 为空时从 config 查找）
+  let currentName = name
+  if (!currentName) {
+    const find = (nodes: any[]): string => {
+      for (const n of nodes) {
+        if (n.folder_id === folderId) return n.name
+        if (n.children) {
+          const found = find(n.children)
+          if (found) return found
+        }
+      }
+      return ''
+    }
+    currentName = find(config.value?.folders || [])
+  }
+  const newName = name || prompt('请输入新文件夹名称：', currentName)
   if (!newName || !newName.trim()) return
   try {
     const res = await fetch(`/config/test-case-folders/${folderId}`, {

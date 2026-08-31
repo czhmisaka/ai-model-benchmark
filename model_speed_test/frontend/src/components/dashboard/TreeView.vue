@@ -23,7 +23,7 @@ const emit = defineEmits<{
   'toggle-case': [caseId: string]
   'select-all': []
   'deselect-all': []
-  'add-folder': []
+  'add-folder': [parentFolderId: string | null]
   'add-case': []
   'rename-folder': [folderId: string, name: string]
   'move-case': [caseId: string, targetFolderId: string | null]
@@ -141,8 +141,11 @@ function handleContextAction(action: string, folderId: string, caseId?: string) 
   const caseIdStr = caseId || ''
   switch (action) {
     case 'create-folder':
+      emit('add-folder', null)
+      break
     case 'create-sub-folder':
-      emit('add-folder')
+      // 在指定文件夹下创建子文件夹：透传父级 id
+      emit('add-folder', folderId)
       break
     case 'rename-folder':
       emit('rename-folder', folderId, '')
@@ -199,7 +202,7 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
       <button class="toolbar-btn" @click="toggleSelectAll" title="全选/取消全选">
         {{ selectAllChar }}
       </button>
-      <button class="toolbar-btn" @click="emit('add-folder')" title="新建文件夹">⊞</button>
+      <button class="toolbar-btn" @click="emit('add-folder', null)" title="新建文件夹">⊞</button>
       <button class="toolbar-btn" @click="emit('add-case')" title="新建测试用例">＋</button>
     </div>
 

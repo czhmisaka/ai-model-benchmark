@@ -1319,6 +1319,15 @@ async def create_test_case_folder(folder_data: dict):
                     conn.close()
                     return {"error": "父文件夹不存在"}
             
+            # 同级同名防重
+            cursor.execute(
+                "SELECT folder_id FROM test_case_folders WHERE name = ? AND COALESCE(parent_id, '') = COALESCE(?, '')",
+                (name, parent_id)
+            )
+            if cursor.fetchone():
+                conn.close()
+                return {"error": "同级已存在同名文件夹"}
+            
             cursor.execute("""
                 INSERT INTO test_case_folders (folder_id, name, parent_id, sort_order)
                 VALUES (?, ?, ?, ?)
