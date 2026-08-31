@@ -39,6 +39,16 @@ export default defineConfig({
       }
     }
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // 大体积依赖单独分包：echarts 仅 History 页使用，加快首屏加载
+        manualChunks: {
+          echarts: ['echarts']
+        }
+      }
+    }
+  },
   css: {
     preprocessorOptions: {
       scss: {}

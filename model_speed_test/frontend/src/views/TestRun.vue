@@ -136,7 +136,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, shallowRef } from 'vue'
+import { ref, computed } from 'vue'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -236,7 +236,6 @@ const gridStyle = {
 
 // TTFT 趋势图
 const ttftChartOption = computed(() => {
-  const data = results.value.map((r, i) => [(i + 1), Math.round(r.ttft * 1000)])
   const successData = results.value
     .map((r, i) => r.success ? [(i + 1), Math.round(r.ttft * 1000)] : null)
     .filter(Boolean)
@@ -307,7 +306,7 @@ const ttftChartOption = computed(() => {
 const tpsChartOption = computed(() => {
   const successData = results.value
     .filter(r => r.success)
-    .map((r, i) => {
+    .map((r) => {
       const realIndex = results.value.indexOf(r) + 1
       return [realIndex, parseFloat(r.tps.toFixed(2))]
     })

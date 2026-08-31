@@ -27,9 +27,19 @@ class TestDatabase:
         self._init_tables()
     
     def _get_connection(self) -> sqlite3.Connection:
-        """获取数据库连接"""
-        conn = sqlite3.connect(self.DB_PATH)
+        """获取数据库连接
+        
+        - WAL 模式：允许并发读写（读不阻塞写），减少多线程写锁冲突
+        - foreign_keys：启用外键约束（当前 schema 无外键，为后续演进准备）
+        """
+        conn = sqlite3.connect(self.DB_PATH, timeout=30)
         conn.row_factory = sqlite3.Row
+        # WAL 提升并发性能；只需设置一次（持久化在 DB 文件），重复执行无副作用
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except Exception:
+            pass
+        conn.execute("PRAGMA foreign_keys=ON")
         return conn
     
     def _init_tables(self):

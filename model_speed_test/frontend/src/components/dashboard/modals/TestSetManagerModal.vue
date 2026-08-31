@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import TreeView from '../TreeView.vue'
 import type { TreeNode, TestCaseWithFolder } from '../TreeItem.vue'
 
@@ -137,13 +137,43 @@ function handleEditCase(caseId: string) {
 }
 
 function handleMoveCase(caseId: string, targetFolderId: string | null) {
+  // 空串 = 需要用户选择目标文件夹；通过序号选择器返回真实 folder_id
+  // （旧逻辑 prompt 收集"文件夹名称"直接当 folder_id 发送，后端查无此 id 必然失败）
   if (targetFolderId === '') {
-    // 弹出选择目标文件夹的对话框
-    const targetId = prompt('请输入目标文件夹名称（留空移至根目录）：')
-    emit('move-case', caseId, targetId || null)
+    const selected = promptSelectFolder()
+    if (selected === undefined) return  // 用户取消
+    emit('move-case', caseId, selected)
   } else {
     emit('move-case', caseId, targetFolderId)
   }
+}
+
+// 弹出文件夹选择器（返回 folder_id；null=根目录；undefined=取消）
+function promptSelectFolder(): string | null | undefined {
+  const flat: { id: string; label: string }[] = []
+  const walk = (nodes: TreeNode[], prefix: string) => {
+    for (const n of nodes) {
+      flat.push({ id: n.folder_id, label: prefix + n.name })
+      if (n.children && n.children.length) walk(n.children, prefix + '  ')
+    }
+  }
+  walk(props.folders, '')
+
+  if (!flat.length) {
+    return confirm('当前没有文件夹，是否将用例移到未分类（根目录）？') ? null : undefined
+  }
+
+  const menu = flat.map((f, i) => `${i + 1}. ${f.label}`).join('\n')
+  const input = prompt(
+    `选择目标文件夹（输入序号）：\n0. 未分类（根目录）\n${menu}\n\n取消 = 放弃移动`,
+    '0'
+  )
+  if (input === null) return undefined
+  const idx = parseInt(input, 10)
+  if (isNaN(idx) || idx < 0 || idx > flat.length) {
+    return undefined
+  }
+  return idx === 0 ? null : flat[idx - 1].id
 }
 
 function handleDeleteCase(caseId: string) {
@@ -157,8 +187,9 @@ function handleMoveCaseFromDetail() {
   if (!selectedFolderId.value) return
   const caseId = prompt('输入要移动的用例 ID：')
   if (caseId) {
-    const targetId = prompt('输入目标文件夹名称（留空移至根目录）：')
-    emit('move-case', caseId, targetId || null)
+    const selected = promptSelectFolder()
+    if (selected === undefined) return  // 用户取消
+    emit('move-case', caseId, selected)
   }
 }
 

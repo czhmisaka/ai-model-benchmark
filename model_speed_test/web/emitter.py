@@ -263,10 +263,12 @@ class TestEventEmitter:
         # 构建 case_folder_map（test_case_name → { folder_id, folder_name }）
         case_folder_map: Dict[str, Dict[str, str]] = getattr(self, '_case_folder_map', {}) or {}
         
-        # 保存到数据库
+        # 保存到数据库（委托线程池，避免同步 SQLite 阻塞事件循环）
         if self._use_db and self._db:
             try:
-                self._db.create_group(
+                from src.async_io import run_in_executor
+                await run_in_executor(
+                    self._db.create_group,
                     group_id=group_id,
                     name=f"测试 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                     models=models,
@@ -444,7 +446,9 @@ class TestEventEmitter:
                 
                 # 不进行任何截断，使用完整输出
                 import json as _json
-                self._db.add_result(
+                from src.async_io import run_in_executor
+                await run_in_executor(
+                    self._db.add_result,
                     group_id=group_id,
                     model_name=model_name,
                     test_case_name=test_case_name,
@@ -463,7 +467,7 @@ class TestEventEmitter:
                 print(f"[Emitter] 已保存测试结果: {group_id} - {model_name} - R{current_round}")
                 
                 # 更新 test_groups 表的 completed_rounds 和统计信息
-                self._update_group_progress(group_id, success)
+                await self._update_group_progress(group_id, success)
             except Exception as e:
                 print(f"[Emitter] 保存测试结果失败: {e}")
 
@@ -514,7 +518,7 @@ class TestEventEmitter:
         
         # 更新 test_groups 表的进度（错误也计入失败）
         if group_id:
-            self._update_group_progress(group_id, success=False)
+            await self._update_group_progress(group_id, success=False)
         
         # 保存状态（包含 error 事件）
         self._save_state()
@@ -530,14 +534,16 @@ class TestEventEmitter:
         # 更新测试组状态
         if self._use_db and self._db and group_id:
             try:
+                from src.async_io import run_in_executor
                 # 直接从数据库查询实际统计结果，而不是依赖内存中的 _test_results
                 # 因为并发模式下内存列表可能不完整
-                results = self._db.get_results(group_id)
+                results = await run_in_executor(self._db.get_results, group_id)
                 success_count = sum(1 for r in results if r.get("success", 0) == 1)
                 failed_count = len(results) - success_count
                 completed_rounds = len(results)
                 
-                self._db.update_group(
+                await run_in_executor(
+                    self._db.update_group,
                     group_id=group_id,
                     end_time=datetime.now().isoformat(),
                     status="completed",
@@ -569,19 +575,21 @@ class TestEventEmitter:
             "completed_count": 0
         }
     
-    def _update_group_progress(self, group_id: str, success: bool):
-        """更新测试组的进度（每轮完成后调用）"""
+    async def _update_group_progress(self, group_id: str, success: bool):
+        """更新测试组的进度（每轮完成后调用，DB 操作委托线程池）"""
         if not self._use_db or not self._db or not group_id:
             return
         
         try:
-            # 获取当前统计
-            results = self._db.get_results(group_id)
+            from src.async_io import run_in_executor
+            
+            # 获取当前统计（线程池执行，避免阻塞事件循环）
+            results = await run_in_executor(self._db.get_results, group_id)
             success_count = sum(1 for r in results if r.get("success", 0) == 1)
             failed_count = len(results) - success_count
             
             # 检查是否全部完成
-            group = self._db.get_group(group_id)
+            group = await run_in_executor(self._db.get_group, group_id)
             total_rounds = group.get("total_rounds", 0) if group else 0
             completed_rounds = len(results)
             
@@ -592,7 +600,8 @@ class TestEventEmitter:
                 status = "running"
             
             # 更新 test_groups 表
-            self._db.update_group(
+            await run_in_executor(
+                self._db.update_group,
                 group_id=group_id,
                 status=status,
                 completed_rounds=completed_rounds,

@@ -100,7 +100,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
-import ReportPreviewModal from '../components/ReportPreviewModal.vue'
 
 const history = ref<any[]>([])
 const search = ref('')
@@ -120,6 +119,9 @@ const distChartRef = ref<HTMLElement | null>(null)
 let trendChart: echarts.ECharts | null = null
 let compareChart: echarts.ECharts | null = null
 let distChart: echarts.ECharts | null = null
+// 图表渲染延迟定时器（快速切换分组时取消旧的渲染，防止竞态）
+let renderTimer: ReturnType<typeof setTimeout> | null = null
+const RENDER_DELAY = 100
 
 // 加载历史数据
 async function loadHistory() {
@@ -187,12 +189,21 @@ async function viewCharts(item: any) {
   selectedGroup.value = item
   showCharts.value = true
   await nextTick()
-  setTimeout(() => {
-    renderCharts(item)
-  }, 100)
+  scheduleRender(item)
+}
+
+// 调度一次图表渲染：取消未触发的旧定时器，避免快速切换时对旧 DOM 渲染
+function scheduleRender(group: any, delay: number = RENDER_DELAY) {
+  if (renderTimer) clearTimeout(renderTimer)
+  renderTimer = setTimeout(() => {
+    renderTimer = null
+    renderCharts(group)
+  }, delay)
 }
 
 async function renderCharts(group: any) {
+  // 竞态守卫：当前选中分组已变化或图表区已隐藏时放弃本次渲染
+  if (!showCharts.value || !selectedGroup.value) return
   // 获取测试结果
   try {
     const res = await fetch(`/api/history/${group.group_id}/results`)
@@ -406,12 +417,14 @@ onUnmounted(() => {
   if (trendChart) { trendChart.dispose(); trendChart = null }
   if (compareChart) { compareChart.dispose(); compareChart = null }
   if (distChart) { distChart.dispose(); distChart = null }
+  // 清理未触发的渲染定时器
+  if (renderTimer) { clearTimeout(renderTimer); renderTimer = null }
 })
 
-// 窗口大小变化时重绘图表
+// 选中分组变化时重绘图表（走 scheduleRender 防竞态）
 watch(() => selectedGroup.value, (val) => {
   if (val && showCharts.value) {
-    setTimeout(() => renderCharts(val), 200)
+    scheduleRender(val, 200)
   }
 })
 </script>

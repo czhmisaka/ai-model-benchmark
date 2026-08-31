@@ -837,7 +837,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { marked } from 'marked'
 
 const router = useRouter()
@@ -896,8 +896,6 @@ const COLLAPSED_WIDTH = 24  // 折叠后的宽度（只留拖拽把手）
 const EXPAND_TRIGGER = 120  // 展开触发的宽度阈值
 const AUTO_COLLAPSE_WIDTH = 300  // 窗口宽度小于此值时自动折叠
 
-// 浮动日志面板控制
-const logMinimized = ref(false)
 const logPanelX = ref(20)
 const logPanelY = ref(window.innerHeight - 220)  // 默认距离底部220px
 const logPanelWidth = ref(600)
@@ -911,23 +909,8 @@ const MAX_LOG_PANEL_WIDTH = 1200
 const MIN_LOG_PANEL_Y = 40  // 最小距离顶部的距离
 const MAX_LOG_PANEL_Y = window.innerHeight - 100  // 最大距离顶部的距离
 
-// 计算属性：是否正在调整大小（任意方向）
-const isLogResizingAny = computed(() => isLogResizing.value)
 
-// 计算日志面板样式
-const logPanelStyle = computed(() => ({
-  position: 'fixed',
-  left: logPanelX.value + 'px',
-  top: logPanelY.value + 'px',  // 使用 top 属性，使拖拽方向正确
-  width: logPanelWidth.value + 'px',
-  height: logMinimized.value ? 'auto' : logPanelHeight.value + 'px',
-  zIndex: 50,
-  boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
-  borderRadius: logMinimized.value ? '50%' : '12px'
-}))
 
-// 排序
-const sortBy = ref('default')
 
 // 任务数据
 interface SubTask {
@@ -986,89 +969,13 @@ interface Log {
 }
 const logs = ref<Log[]>([])
 
-// 日志控制状态
-const logSearchText = ref('')
-const logFilter = ref<'all' | 'error' | 'running'>('all')
 const logAutoScroll = ref(true)
-const logSearchActive = ref(false)
 const logAreaRef = ref<HTMLElement | null>(null)
 
-// 过滤后的日志
-const filteredLogs = computed(() => {
-  let result = logs.value
-  
-  // 按过滤类型筛选
-  if (logFilter.value === 'error') {
-    result = result.filter(log => 
-      log.tag.toLowerCase() === 'error' || 
-      log.tag.toLowerCase() === 'stop'
-    )
-  } else if (logFilter.value === 'running') {
-    result = result.filter(log => 
-      log.tag.toLowerCase() === 'round' || 
-      log.tag.toLowerCase() === 'start' ||
-      log.tag.toLowerCase() === 'retry' ||
-      log.tag.toLowerCase() === 'chunk'
-    )
-  }
-  
-  // 按搜索文本筛选
-  if (logSearchText.value) {
-    const searchLower = logSearchText.value.toLowerCase()
-    result = result.filter(log => 
-      log.msg.toLowerCase().includes(searchLower) ||
-      log.tag.toLowerCase().includes(searchLower)
-    )
-  }
-  
-  return result
-})
 
-// 获取日志级别样式类
-function getLogLevelClass(tag: string): string {
-  const tagLower = tag.toLowerCase()
-  if (tagLower === 'error') return 'level-error'
-  if (tagLower === 'stop') return 'level-warning'
-  if (tagLower === 'done' || tagLower === 'finish') return 'level-success'
-  if (tagLower === 'round') return 'level-running'
-  if (tagLower === 'start' || tagLower === 'retry') return 'level-info'
-  if (tagLower === 'summary') return 'level-success'
-  if (tagLower === 'chunk') return 'level-running'
-  return 'level-default'
-}
 
-// 清除日志
-function clearLogs() {
-  logs.value = []
-  showToast('日志已清除', 'success')
-}
 
-// 导出日志
-function exportLogs() {
-  const content = logs.value
-    .map(log => `[${log.fullTime}] [${log.tag}] ${log.msg}`)
-    .join('\n')
-  
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `logs_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`
-  link.click()
-  URL.revokeObjectURL(url)
-  
-  showToast('日志已导出', 'success')
-}
 
-// 复制单条日志
-function copyLog(log: Log) {
-  const text = `[${log.fullTime}] [${log.tag}] ${log.msg}`
-  navigator.clipboard.writeText(text).then(() => {
-    showToast('已复制到剪贴板', 'success')
-  }).catch(() => {
-    showToast('复制失败', 'error')
-  })
-}
 
 // 自动滚动到底部
 function scrollToBottom() {
@@ -1498,17 +1405,7 @@ function errorCount(task: Task): number {
   return Object.values(task.sub_tasks || {}).filter(t => t.status === 'error').length
 }
 
-function isAllDone(task: Task): boolean {
-  const subTasks = Object.values(task.sub_tasks || {})
-  return subTasks.length > 0 && subTasks.every(t => t.status === 'done' || t.status === 'error')
-}
 
-// 排序功能
-function sortTasks() {
-  // Vue的响应式会自动更新视图，这里保留接口即可
-  // 实际排序在模板中通过computed处理
-  console.log('Sort by:', sortBy.value)
-}
 
 // ===== 工具函数 =====
 
@@ -1522,53 +1419,6 @@ function sortTasks() {
  * 5. 思考过程：... 最终答案：... 格式
  * 6. reasoning 字段（非流式响应）
  */
-function extractThinkAndAnswer(content: string): { think: string; answer: string } {
-  if (!content) return { think: '', answer: content }
-  
-  let think = ''
-  let answer = content
-  
-  // 1. 去除 <think>...</think> 格式
-  const thinkMatch1 = content.match(/<think>\s*([\s\S]*?)\s*<\/think>/gi)
-  if (thinkMatch1) {
-    think = thinkMatch1.map(m => m.replace(/<think>\s*/gi, '').replace(/\s*<\/think>/gi, '')).join('\n')
-    answer = content.replace(/<think>\s*[\s\S]*?\s*<\/think>/gi, '').trim()
-  }
-  
-  // 2. 去除 <think>...</think> 格式
-  const thinkMatch2 = content.match(/<think>\s*([\s\S]*?)\s*<\/think>/gi)
-  if (thinkMatch2) {
-    think = thinkMatch2.map(m => m.replace(/<think>\s*/gi, '').replace(/\s*<\/think>/gi, '')).join('\n')
-    answer = answer.replace(/<think>\s*[\s\S]*?\s*<\/think>/gi, '').trim()
-  }
-  
-  // 3. 去除 [[模型分析]]...[[/模型分析]] 格式
-  const thinkMatch3 = content.match(/\[\[模型分析\]\]\s*([\s\S]*?)\s*\[\[\/模型分析\]\]/gi)
-  if (thinkMatch3) {
-    think = thinkMatch3.map(m => m.replace(/\[\[模型分析\]\]\s*/gi, '').replace(/\s*\[\[\/模型分析\]\]/gi, '')).join('\n')
-    answer = answer.replace(/\[\[模型分析\]\]\s*[\s\S]*?\s*\[\[\/模型分析\]\]/gi, '').trim()
-  }
-  
-  // 4. 去除 THINK: ... ANSWER: ... 格式中的 THINK 部分
-  const thinkMatch4 = content.match(/THINK:\s*([\s\S]*?)(?=ANSWER:|$)/gi)
-  if (thinkMatch4) {
-    think = thinkMatch4.map(m => m.replace(/THINK:\s*/gi, '')).join('\n')
-    answer = answer.replace(/THINK:\s*[\s\S]*?(?=ANSWER:|$)/gi, '').replace(/^ANSWER:\s*/i, '').trim()
-  }
-  
-  // 5. 去除 思考: ... 答案: ... 格式中的思考部分
-  const thinkMatch5 = content.match(/思考[：:]\s*([\s\S]*?)(?=答案[：:]|最终答案[：:]|回答[：:]|输出[：:])/gi)
-  if (thinkMatch5) {
-    think = thinkMatch5.map(m => m.replace(/思考[：:]\s*/gi, '')).join('\n')
-    answer = answer.replace(/思考[：:]\s*[\s\S]*?(?=答案[：:]|最终答案[：:]|回答[：:]|输出[：:])/gi, '').trim()
-  }
-  
-  // 清理多余空白
-  think = think.replace(/\n{3,}/g, '\n\n').trim()
-  answer = answer.replace(/\n{3,}/g, '\n\n').trim()
-  
-  return { think, answer }
-}
 function getTaskId(modelName: string, caseName: string): string {
   return `${modelName}__${caseName}`
 }
@@ -1694,11 +1544,6 @@ function trimText(text: string): string {
   return text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
-function escapeHtml(text: string): string {
-  const div = document.createElement('div')
-  div.textContent = text
-  return div.innerHTML
-}
 
 function formatDate(dateStr: string): string {
   if (!dateStr) return '--'
@@ -1768,17 +1613,8 @@ function checkCollapseState(width: number, fromCollapsed: boolean) {
   }
 }
 
-function onDrag(e: MouseEvent) {
+function onDrag(_e: MouseEvent) {
   if (!isDragging.value) return
-  const newWidth = e.clientX
-  // 限制最小和最大宽度
-  const minWidth = isCollapsed.value ? COLLAPSED_WIDTH : 60
-  const maxWidth = window.innerWidth - 300
-  
-  // 如果正在展开过程中，使用较大最小值
-  const actualMinWidth = isCollapsed.value ? COLLAPSED_WIDTH : 60
-  
-  sidebarWidth.value = Math.max(actualMinWidth, Math.min(maxWidth, newWidth))
 }
 
 function stopDrag() {
@@ -1815,32 +1651,7 @@ let logPanelDragStartX = 0
 let logPanelDragStartY = 0
 let logPanelStartX = 0
 let logPanelStartY = 0
-let logPanelDraggingEl: HTMLElement | null = null
-let logPanelDragOffsetX = 0
-let logPanelDragOffsetY = 0
 
-function startLogPanelDrag(e: MouseEvent) {
-  // 不允许拖拽带有输入焦点的元素
-  if ((e.target as HTMLElement).tagName === 'INPUT') return
-  
-  const panel = document.querySelector('.log-panel') as HTMLElement
-  if (!panel) return
-  
-  isLogPanelDragging.value = true
-  logPanelDragStartX = e.clientX
-  logPanelDragStartY = e.clientY
-  logPanelStartX = logPanelX.value
-  logPanelStartY = logPanelY.value
-  
-  // 使用 transform 提升性能
-  panel.style.transition = 'none'
-  panel.style.zIndex = '1000'
-  
-  // 添加全局事件监听
-  document.addEventListener('mousemove', onLogPanelDrag, { passive: false })
-  document.addEventListener('mouseup', stopLogPanelDrag, { passive: true })
-  e.preventDefault()
-}
 
 function onLogPanelDrag(e: MouseEvent) {
   if (!isLogPanelDragging.value) return
@@ -1877,15 +1688,6 @@ function stopLogPanelDrag() {
 let logResizeStartY = 0
 let logResizeStartHeight = 0
 
-function startLogResize(e: MouseEvent) {
-  isLogResizing.value = true
-  logResizeStartY = e.clientY
-  logResizeStartHeight = logPanelHeight.value
-  
-  document.addEventListener('mousemove', onLogResize)
-  document.addEventListener('mouseup', stopLogResize)
-  e.preventDefault()
-}
 
 function onLogResize(e: MouseEvent) {
   if (!isLogResizing.value) return
@@ -1906,15 +1708,6 @@ function stopLogResize() {
 let logResizeTopStartY = 0
 let logResizeTopStartHeight = 0
 
-function startLogResizeTop(e: MouseEvent) {
-  isLogResizing.value = true
-  logResizeTopStartY = e.clientY
-  logResizeTopStartHeight = logPanelHeight.value
-  
-  document.addEventListener('mousemove', onLogResizeTop)
-  document.addEventListener('mouseup', stopLogResizeTop)
-  e.preventDefault()
-}
 
 function onLogResizeTop(e: MouseEvent) {
   if (!isLogResizing.value) return
@@ -1935,15 +1728,6 @@ function stopLogResizeTop() {
 let logResizeBottomStartY = 0
 let logResizeBottomStartHeight = 0
 
-function startLogResizeBottom(e: MouseEvent) {
-  isLogResizing.value = true
-  logResizeBottomStartY = e.clientY
-  logResizeBottomStartHeight = logPanelHeight.value
-  
-  document.addEventListener('mousemove', onLogResizeBottom)
-  document.addEventListener('mouseup', stopLogResizeBottom)
-  e.preventDefault()
-}
 
 function onLogResizeBottom(e: MouseEvent) {
   if (!isLogResizing.value) return
@@ -1964,15 +1748,6 @@ function stopLogResizeBottom() {
 let logResizeLeftStartX = 0
 let logResizeLeftStartWidth = 0
 
-function startLogResizeLeft(e: MouseEvent) {
-  isLogResizing.value = true
-  logResizeLeftStartX = e.clientX
-  logResizeLeftStartWidth = logPanelWidth.value
-  
-  document.addEventListener('mousemove', onLogResizeLeft)
-  document.addEventListener('mouseup', stopLogResizeLeft)
-  e.preventDefault()
-}
 
 function onLogResizeLeft(e: MouseEvent) {
   if (!isLogResizing.value) return
@@ -1993,15 +1768,6 @@ function stopLogResizeLeft() {
 let logResizeRightStartX = 0
 let logResizeRightStartWidth = 0
 
-function startLogResizeRight(e: MouseEvent) {
-  isLogResizing.value = true
-  logResizeRightStartX = e.clientX
-  logResizeRightStartWidth = logPanelWidth.value
-  
-  document.addEventListener('mousemove', onLogResizeRight)
-  document.addEventListener('mouseup', stopLogResizeRight)
-  e.preventDefault()
-}
 
 function onLogResizeRight(e: MouseEvent) {
   if (!isLogResizing.value) return
@@ -2024,17 +1790,6 @@ let logResizeTopLeftStartY = 0
 let logResizeTopLeftStartWidth = 0
 let logResizeTopLeftStartHeight = 0
 
-function startLogResizeTopLeft(e: MouseEvent) {
-  isLogResizing.value = true
-  logResizeTopLeftStartX = e.clientX
-  logResizeTopLeftStartY = e.clientY
-  logResizeTopLeftStartWidth = logPanelWidth.value
-  logResizeTopLeftStartHeight = logPanelHeight.value
-  
-  document.addEventListener('mousemove', onLogResizeTopLeft)
-  document.addEventListener('mouseup', stopLogResizeTopLeft)
-  e.preventDefault()
-}
 
 function onLogResizeTopLeft(e: MouseEvent) {
   if (!isLogResizing.value) return
@@ -2061,17 +1816,6 @@ let logResizeTopRightStartY = 0
 let logResizeTopRightStartWidth = 0
 let logResizeTopRightStartHeight = 0
 
-function startLogResizeTopRight(e: MouseEvent) {
-  isLogResizing.value = true
-  logResizeTopRightStartX = e.clientX
-  logResizeTopRightStartY = e.clientY
-  logResizeTopRightStartWidth = logPanelWidth.value
-  logResizeTopRightStartHeight = logPanelHeight.value
-  
-  document.addEventListener('mousemove', onLogResizeTopRight)
-  document.addEventListener('mouseup', stopLogResizeTopRight)
-  e.preventDefault()
-}
 
 function onLogResizeTopRight(e: MouseEvent) {
   if (!isLogResizing.value) return
@@ -2098,17 +1842,6 @@ let logResizeBottomLeftStartY = 0
 let logResizeBottomLeftStartWidth = 0
 let logResizeBottomLeftStartHeight = 0
 
-function startLogResizeBottomLeft(e: MouseEvent) {
-  isLogResizing.value = true
-  logResizeBottomLeftStartX = e.clientX
-  logResizeBottomLeftStartY = e.clientY
-  logResizeBottomLeftStartWidth = logPanelWidth.value
-  logResizeBottomLeftStartHeight = logPanelHeight.value
-  
-  document.addEventListener('mousemove', onLogResizeBottomLeft)
-  document.addEventListener('mouseup', stopLogResizeBottomLeft)
-  e.preventDefault()
-}
 
 function onLogResizeBottomLeft(e: MouseEvent) {
   if (!isLogResizing.value) return
@@ -2298,8 +2031,47 @@ async function handleRenameFolder(folderId: string, name: string) {
   }
 }
 
+// 弹出文件夹选择器（返回 folder_id；null=移到根目录；undefined=用户取消）
+function promptSelectFolder(): string | null | undefined {
+  const folders = (config.value?.folders || []) as any[]
+  // 扁平化文件夹列表
+  const flat: { id: string; label: string }[] = []
+  const walk = (nodes: any[], prefix: string) => {
+    for (const n of nodes) {
+      flat.push({ id: n.folder_id, label: prefix + n.name })
+      if (n.children && n.children.length) walk(n.children, prefix + '  ')
+    }
+  }
+  walk(folders, '')
+
+  if (!flat.length) {
+    // 无文件夹：确认是否移到根目录
+    return confirm('当前没有文件夹，是否将用例移到未分类（根目录）？') ? null : undefined
+  }
+
+  const menu = flat.map((f, i) => `${i + 1}. ${f.label}`).join('\n')
+  const input = prompt(
+    `选择目标文件夹（输入序号）：\n0. 未分类（根目录）\n${menu}\n\n取消 = 放弃移动`,
+    '0'
+  )
+  if (input === null) return undefined  // 用户取消
+  const idx = parseInt(input, 10)
+  if (isNaN(idx) || idx < 0 || idx > flat.length) {
+    showToast('无效的序号，已取消移动', 'error')
+    return undefined
+  }
+  return idx === 0 ? null : flat[idx - 1].id
+}
+
 // 移动用例到指定文件夹
 async function handleMoveCase(caseId: string, targetFolderId: string | null) {
+  // 右键菜单/旧逻辑传入空串表示"需选择目标"，弹出选择器；
+  // 空串直接发送会被后端按原样写入 DB（'' ≠ NULL，导致用例从树中"消失"）
+  if (targetFolderId === '' as any) {
+    const selected = promptSelectFolder()
+    if (selected === undefined) return  // 用户取消
+    targetFolderId = selected
+  }
   try {
     // 统一走专用 /move 端点（后端会校验文件夹存在性）
     const res = await fetch(`/config/test-cases/${caseId}/move`, {
@@ -2364,10 +2136,6 @@ function editCaseById(caseId: string) {
   modalVisible.value = true
 }
 
-// 从管理弹窗删除用例
-async function deleteCaseFromManager(caseId: string) {
-  await deleteCase(caseId)
-}
 
 // 展开所有文件夹
 function handleExpandAll(folderId: string) {
@@ -2880,7 +2648,6 @@ function onCardDrag(e: MouseEvent) {
   const container = document.getElementById('taskCards')
   if (!container) return
   
-  const containerRect = container.getBoundingClientRect()
   const cards = container.querySelectorAll('.task-card')
   
   // 计算当前拖拽位置
@@ -3046,14 +2813,6 @@ function getCardStyle(taskId: string): Record<string, string> {
   return style
 }
 
-// 卡片展开/折叠
-function toggleExpand(taskId: string) {
-  const task = tasks.value[taskId]
-  if (!task) return
-  
-  // 切换展开状态
-  task.expanded = !task.expanded
-}
 
 // 打开任务详情弹窗
 function openTaskDetail(taskId: string) {
@@ -3241,7 +3000,7 @@ function showRoundPopoverForButton(e: MouseEvent, taskId: string, subId: string,
   showRoundPopover(e, taskId, subId, subTask)
 }
 
-function showRoundPopover(e: MouseEvent, taskId: string, subId: string, subTask: SubTask) {
+function showRoundPopover(e: MouseEvent, _taskId: string, _subId: string, subTask: SubTask) {
   const target = e.target as HTMLElement
   const rect = target.getBoundingClientRect()
   
@@ -3355,70 +3114,8 @@ const casePopoverX = ref(0)
 const casePopoverY = ref(0)
 const casePopoverData = ref<any>({})
 
-function showCasePopover(e: MouseEvent, caseItem: any) {
-  const target = e.target as HTMLElement
-  const rect = target.getBoundingClientRect()
-  
-  casePopoverX.value = rect.left + rect.width / 2 - 150
-  casePopoverY.value = rect.bottom + 8
-  
-  // 使用测试用例信息
-  casePopoverData.value = caseItem
-  
-  // 调整位置确保不超出视口
-  nextTick(() => {
-    const popover = document.querySelector('.case-popover') as HTMLElement
-    if (!popover) return
-    
-    const popoverRect = popover.getBoundingClientRect()
-    let left = casePopoverX.value
-    let top = casePopoverY.value
-    
-    if (left + popoverRect.width > window.innerWidth - 10) {
-      left = window.innerWidth - popoverRect.width - 10
-    }
-    if (left < 10) left = 10
-    if (top + popoverRect.height > window.innerHeight - 10) {
-      top = rect.top - popoverRect.height - 8
-    }
-    if (top < 10) top = 10
-    
-    casePopoverX.value = left
-    casePopoverY.value = top
-  })
-  
-  casePopoverVisible.value = true
-}
 
-function hideCasePopover() {
-  casePopoverVisible.value = false
-}
 
-// 编辑功能
-function editCase(caseItem: any) {
-  // 填充表单
-  caseForm.name = caseItem.name
-  // 优先使用 messages 字段，如果没有则降级使用 prompt
-  if (caseItem.messages && Array.isArray(caseItem.messages) && caseItem.messages.length > 0) {
-    caseForm.messages = JSON.parse(JSON.stringify(caseItem.messages))
-  } else if (caseItem.prompt) {
-    // 兼容旧数据：将 prompt 转换为 messages 格式
-    caseForm.messages = [{ role: 'user', content: caseItem.prompt }]
-  } else {
-    caseForm.messages = [{ role: 'user', content: '' }]
-  }
-  normalizeMessageModes()
-      caseForm.max_tokens = caseItem.max_tokens || 500
-  caseForm.expected_output = caseItem.expected_output || ''
-  caseForm.eval_model = caseItem.eval_model || ''
-  
-  // 保存当前编辑的用例ID
-  currentEditCaseId.value = caseItem.id
-  
-  // 显示模态框
-  modalType.value = 'case'
-  modalVisible.value = true
-}
 
 function editModel(model: any) {
   // 填充表单

@@ -199,46 +199,24 @@ def get_test_suite_test_cases(config: Dict[str, Any]) -> List[Dict]:
 
 
 def create_clients(config: Dict[str, Any], model_names: List[str] = None) -> List[ModelClient]:
-    """创建模型客户端
-    
-    支持两种模式：
-    1. 使用原有的 ModelClient（旧版兼容）
-    2. 使用新的 Provider 系统（支持多 Provider）
+    """创建模型客户端（统一入口）
+
+    ModelClient 内部通过 Provider 注册表分发到具体的 Provider 实现
+    （openai/anthropic/gemini/azure/lmstudio/ollama），无需再走适配器。
     """
     clients = []
-    
+
     models = get_enabled_models(config, model_names)
-    
+
     for model in models:
         provider = model.get("provider", "openai")
-        
-        # 尝试使用新的 Provider 系统
         try:
-            from src.client_adapter import ProviderAdapter
-            adapter = ProviderAdapter(
+            client = ModelClient(
                 name=model["name"],
+                endpoint=model["endpoint"],
+                api_key=model["api_key"],
+                model=model["model"],
                 provider=provider,
-                endpoint=model["endpoint"],
-                api_key=model["api_key"],
-                model=model["model"],
-                temperature=model.get("temperature", 0.7),
-                top_p=model.get("top_p", 1.0),
-                max_tokens=model.get("max_tokens", 4096),
-                presence_penalty=model.get("presence_penalty", 0.0),
-                frequency_penalty=model.get("frequency_penalty", 0.0),
-                thinking_enabled=model.get("thinking_enabled", True)
-            )
-            # 将适配器包装为兼容 ModelClient 的接口
-            clients.append(adapter)
-            print(f"✅ 使用 Provider [{provider}] 创建客户端: {model['name']}")
-        except ImportError:
-            # 如果 Provider 导入失败，回退到原有的 ModelClient
-            print(f"⚠️ Provider [{provider}] 不可用，回退到 ModelClient: {model['name']}")
-            client = ModelClient(
-                name=model["name"],
-                endpoint=model["endpoint"],
-                api_key=model["api_key"],
-                model=model["model"],
                 temperature=model.get("temperature", 0.7),
                 top_p=model.get("top_p", 1.0),
                 max_tokens=model.get("max_tokens", 4096),
@@ -247,219 +225,11 @@ def create_clients(config: Dict[str, Any], model_names: List[str] = None) -> Lis
                 thinking_enabled=model.get("thinking_enabled", True)
             )
             clients.append(client)
+            print(f"✅ 创建客户端 [provider={provider}]: {model['name']}")
         except Exception as e:
-            # 其他错误，回退到原有的 ModelClient
-            print(f"⚠️ Provider [{provider}] 创建失败: {e}，回退到 ModelClient")
-            client = ModelClient(
-                name=model["name"],
-                endpoint=model["endpoint"],
-                api_key=model["api_key"],
-                model=model["model"],
-                temperature=model.get("temperature", 0.7),
-                top_p=model.get("top_p", 1.0),
-                max_tokens=model.get("max_tokens", 4096),
-                presence_penalty=model.get("presence_penalty", 0.0),
-                frequency_penalty=model.get("frequency_penalty", 0.0),
-                thinking_enabled=model.get("thinking_enabled", True)
-            )
-            clients.append(client)
-    
+            print(f"❌ 创建客户端失败 {model['name']}: {e}")
+
     return clients
-
-
-async def run_single_test(
-    client: ModelClient,
-    recorder: IORecorder,
-    test_case: Dict[str, Any],
-    rounds: int,
-    interval: float
-) -> Dict[str, Any]:
-    """运行单个测试用例"""
-    prompt = test_case.get("prompt")
-    messages = test_case.get("messages")
-    system_prompt = test_case.get("system_prompt")
-    
-    test_config = {
-        "max_tokens": test_case.get("max_tokens", 500),
-        "temperature": test_case.get("temperature", 0.7),
-        "stream": test_case.get("stream", True)
-    }
-    
-    print(f"\n{'='*60}")
-    print(f"测试用例: {test_case.get('name', '未命名')}")
-    print(f"测试类型: {test_case.get('type', 'N/A')}")
-    
-    if messages:
-        print(f"消息数量: {len(messages)}条")
-        print(f"最后一条消息: {messages[-1].get('content', '')[:50]}...")
-    else:
-        print(f"测试Prompt: {prompt[:50] if prompt else 'N/A'}...")
-    
-    if system_prompt:
-        print(f"系统提示词: {system_prompt[:30]}...")
-    
-    print(f"测试轮次: {rounds}")
-    print(f"流式输出: {test_config.get('stream', True)}")
-    print(f"{'='*60}\n")
-    
-    print(f"\n>>> 测试模型: {client.name}")
-    
-    tester = ModelTester(client, recorder, test_config)
-    
-    try:
-        results = await tester.run_test_rounds(
-            prompt=prompt,
-            rounds=rounds,
-            interval=interval,
-            messages=messages,
-            system_prompt=system_prompt
-        )
-        
-        # 收集成功的结果
-        success_metrics = [r.metrics for r in results if r.success]
-        
-        if success_metrics:
-            aggregated = MetricsCalculator.aggregate_metrics(success_metrics)
-            
-            print(f"\n[{client.name} - {test_case.get('name', '未命名')} 汇总]:")
-            print(f"  首Token时间(TTFT): 平均 {aggregated['ttft']['avg']:.3f}s (最小: {aggregated['ttft']['min']:.3f}s, 最大: {aggregated['ttft']['max']:.3f}s)")
-            print(f"  生成时间(TPFT): 平均 {aggregated['tpft']['avg']:.3f}s")
-            print(f"  总耗时: 平均 {aggregated['total_time']['avg']:.3f}s")
-            print(f"  输出速度: 平均 {aggregated['tokens_per_second']['avg']:.2f} tokens/s")
-            
-            return {
-                "test_case": test_case.get("name", "未命名"),
-                "metrics": aggregated,
-                "success": True
-            }
-        else:
-            print(f"  所有测试均失败!")
-            return {
-                "test_case": test_case.get("name", "未命名"),
-                "metrics": None,
-                "success": False
-            }
-            
-    except Exception as e:
-        print(f"  测试出错: {e}")
-        return {
-            "test_case": test_case.get("name", "未命名"),
-            "metrics": None,
-            "success": False,
-            "error": str(e)
-        }
-
-
-async def run_tests(
-    clients: List[ModelClient],
-    config: Dict[str, Any],
-    test_cases: List[Dict[str, Any]] = None,
-    shutdown_event: asyncio.Event = None
-):
-    """运行测试 - 支持多测试用例遍历"""
-    from datetime import datetime
-    
-    # 测试配置
-    conc_config = config.get("concurrency", {})
-    rounds = conc_config.get("test_rounds", 10)
-    interval = conc_config.get("interval", 1)
-    
-    # 获取测试用例列表
-    if test_cases is None or len(test_cases) == 0:
-        test_cases = get_test_suite_test_cases(config)
-        if not test_cases:
-            test_cases = [{
-                "name": "默认测试",
-                "prompt": "你好",
-                "max_tokens": 500,
-                "temperature": 0.7,
-                "stream": True,
-                "messages": None,
-                "system_prompt": None
-            }]
-    
-    # 生成任务标识
-    group_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    task_name = f"{len(clients)}models_{len(test_cases)}cases"
-    
-    # 初始化记录器
-    output_config = config.get("output", {})
-    recorder = IORecorder(
-        results_dir=output_config.get("results_dir", "results"),
-        save_detailed=output_config.get("save_detailed_logs", True),
-        group_id=group_id,
-        task_name=task_name,
-        total_rounds=rounds,
-        config={
-            "models": [c.name for c in clients],
-            "test_cases": [tc.get("name") for tc in test_cases],
-            "rounds": rounds
-        }
-    )
-    
-    print(f"\n📁 测试记录目录: {recorder.task_dir}")
-    
-    # 显示总体测试信息
-    print(f"\n{'='*60}")
-    print(f"AI模型速度测试")
-    print(f"{'='*60}")
-    print(f"测试用例数量: {len(test_cases)}个")
-    print(f"每个测试轮次: {rounds}轮")
-    print(f"{'='*60}\n")
-    
-    all_results = {}
-    
-    # 遍历每个模型和每个测试用例
-    for client in clients:
-        client_results = []
-        
-        for test_case in test_cases:
-            result = await run_single_test(
-                client, recorder, test_case, rounds, interval
-            )
-            client_results.append(result)
-        
-        all_results[client.name] = client_results
-        
-        # 关闭客户端连接
-        try:
-            await client.close()
-        except Exception as e:
-            print(f"  关闭客户端时出错: {e}")
-    
-    # 输出汇总
-    print(f"\n{'='*60}")
-    print("最终汇总")
-    print(f"{'='*60}")
-    
-    for model_name, results in all_results.items():
-        print(f"\n【{model_name}】")
-        
-        for result in results:
-            test_case_name = result.get("test_case", "未命名")
-            print(f"\n  测试用例: {test_case_name}")
-            
-            if result["success"] and result.get("metrics"):
-                stats = result["metrics"]
-                print(f"    测试次数: {stats['count']}次")
-                print(f"    首Token时间(TTFT): 平均 {stats['ttft']['avg']:.3f}s (最小: {stats['ttft']['min']:.3f}s, 最大: {stats['ttft']['max']:.3f}s)")
-                print(f"    生成时间(TPFT): 平均 {stats['tpft']['avg']:.3f}s")
-                print(f"    总响应时间: 平均 {stats['total_time']['avg']:.3f}s")
-                print(f"    输出速度(吞吐量): 平均 {stats['tokens_per_second']['avg']:.2f} tokens/s")
-                print(f"    输出Token数: 平均 {stats['output_tokens']['avg']:.0f}")
-            else:
-                print(f"    测试失败!")
-                if result.get("error"):
-                    print(f"    错误: {result['error']}")
-    
-    # 完成记录
-    await recorder.finalize()
-    
-    # 导出CSV
-    csv_path = await recorder.export_csv()
-    if csv_path:
-        print(f"\nCSV记录已保存到: {csv_path}")
-
 
 def list_test_cases(config: Dict[str, Any]):
     """列出所有测试用例"""
@@ -659,105 +429,40 @@ class WebAwareTester:
             if follow_up_questions:
                 print(f"[{model_name}] 📋 检测到多步骤测试: {len(follow_up_questions)}个跟进问题")
         
-        # 如果需要校对，创建校对客户端
+        # 如果需要校对，创建校对客户端（统一走 ModelClient 单入口）
         if needs_verification and self.eval_model_config:
-            try:
-                # 从模型列表中找到校对模型对应的配置
-                eval_model_cfg = None
-                models_list = self.eval_model_config.get("models", [])
-                for m in models_list:
-                    if m.get("name") == eval_model:
-                        eval_model_cfg = m
-                        break
+            eval_model_cfg = None
+            models_list = self.eval_model_config.get("models", [])
+            for m in models_list:
+                if m.get("name") == eval_model:
+                    eval_model_cfg = m
+                    break
 
-                if eval_model_cfg:
-                    eval_provider = eval_model_cfg.get("provider", "openai")
-                    try:
-                        # 尝试使用 ProviderAdapter
-                        from src.client_adapter import ProviderAdapter
-                        eval_client = ProviderAdapter(
-                            name=eval_model,
-                            provider=eval_provider,
-                            endpoint=eval_model_cfg.get("endpoint"),
-                            api_key=eval_model_cfg.get("api_key"),
-                            model=eval_model_cfg.get("model", ""),
-                            temperature=0.3,  # 校对时使用较低温度
-                            top_p=1.0,
-                            max_tokens=2048,
-                            presence_penalty=0.0,
-                            frequency_penalty=0.0,
-                            thinking_enabled=False  # 校对时禁用思考
-                        )
-                        print(f"✅ 已创建校对客户端: {eval_model} (provider={eval_provider})")
-                    except (ValueError, ImportError) as adapter_err:
-                        # ProviderAdapter 失败时，回退到使用 ModelClient
-                        print(f"⚠️ ProviderAdapter 创建失败 ({adapter_err})，回退到 ModelClient")
-                        try:
-                            from src.client import ModelClient
-                            eval_client = ModelClient(
-                                name=eval_model,
-                                endpoint=eval_model_cfg.get("endpoint"),
-                                api_key=eval_model_cfg.get("api_key"),
-                                model=eval_model_cfg.get("model", eval_model),
-                                temperature=0.3,
-                                top_p=1.0,
-                                max_tokens=2048,
-                                presence_penalty=0.0,
-                                frequency_penalty=0.0,
-                                thinking_enabled=False
-                            )
-                            print(f"✅ 已创建校对客户端 (ModelClient): {eval_model}")
-                        except Exception as model_err:
-                            print(f"⚠️ ModelClient 创建也失败: {model_err}")
-                            eval_client = None
-                else:
-                    print(f"⚠️ 未找到校对模型配置: {eval_model}，尝试使用默认配置")
-                    # 如果没找到，尝试使用第一个模型作为校对模型
-                    if models_list:
-                        eval_model_cfg = models_list[0]
-                        eval_provider = eval_model_cfg.get("provider", "openai")
-                        try:
-                            from src.client_adapter import ProviderAdapter
-                            eval_client = ProviderAdapter(
-                                name=eval_model,
-                                provider=eval_provider,
-                                endpoint=eval_model_cfg.get("endpoint"),
-                                api_key=eval_model_cfg.get("api_key"),
-                                model=eval_model_cfg.get("model", ""),
-                                temperature=0.3,
-                                top_p=1.0,
-                                max_tokens=2048,
-                                presence_penalty=0.0,
-                                frequency_penalty=0.0,
-                                thinking_enabled=False
-                            )
-                            print(f"✅ 使用默认模型 {eval_model_cfg.get('name')} 作为校对模型")
-                        except (ValueError, ImportError):
-                            print(f"⚠️ ProviderAdapter 创建失败，回退到 ModelClient")
-                            try:
-                                from src.client import ModelClient
-                                eval_client = ModelClient(
-                                    name=eval_model,
-                                    endpoint=eval_model_cfg.get("endpoint"),
-                                    api_key=eval_model_cfg.get("api_key"),
-                                    model=eval_model_cfg.get("model", eval_model_cfg.get("name")),
-                                    temperature=0.3,
-                                    top_p=1.0,
-                                    max_tokens=2048,
-                                    presence_penalty=0.0,
-                                    frequency_penalty=0.0,
-                                    thinking_enabled=False
-                                )
-                                print(f"✅ 使用默认模型 {eval_model_cfg.get('name')} 作为校对模型 (ModelClient)")
-                            except Exception as model_err:
-                                print(f"⚠️ ModelClient 创建也失败: {model_err}")
-                                eval_client = None
-                        except Exception as e:
-                            print(f"⚠️ 创建校对客户端失败: {e}")
-                            eval_client = None
-            except Exception as e:
-                print(f"⚠️ 创建校对客户端失败: {e}")
-                eval_client = None
+            if not eval_model_cfg and models_list:
+                # 未找到指定校对模型时，回退使用第一个模型
+                eval_model_cfg = models_list[0]
+                print(f"⚠️ 未找到校对模型配置: {eval_model}，使用默认模型 {eval_model_cfg.get('name')}")
+
+            if eval_model_cfg:
+                try:
+                    from src.client import ModelClient
+                    eval_client = ModelClient(
+                        name=eval_model,
+                        endpoint=eval_model_cfg.get("endpoint"),
+                        api_key=eval_model_cfg.get("api_key"),
+                        model=eval_model_cfg.get("model", eval_model),
+                        provider=eval_model_cfg.get("provider", "openai"),
+                        temperature=0.3,  # 校对时使用较低温度
+                        top_p=1.0,
+                        max_tokens=2048,
+                        presence_penalty=0.0,
+                        frequency_penalty=0.0,
+                        thinking_enabled=False  # 校对时禁用思考
+                    )
+                    print(f"✅ 已创建校对客户端: {eval_model}")
+                except Exception as e:
+                    print(f"⚠️ 创建校对客户端失败: {e}")
+                    eval_client = None
         elif needs_verification and self.eval_manager:
             # 使用评估管理器中的客户端
             eval_client = self.eval_manager.eval_client

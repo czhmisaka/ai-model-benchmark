@@ -35,7 +35,6 @@ const emit = defineEmits<{
 }>()
 
 // ===== 搜索状态 =====
-const isSearchActive = computed(() => props.searchQuery.trim().length > 0)
 
 // 按 folder_id 索引用例，避免每次响应式触发重建整棵树。
 // 注意：props.folders 是树形结构（含 .children），不能 JSON 深拷贝，
@@ -93,11 +92,11 @@ function onDragStart(event: DragEvent, caseId: string) {
   }
 }
 
-function onDragOver(event: DragEvent, folderId: string) {
+function onDragOver(_event: DragEvent, folderId: string) {
   dragOverFolderId.value = folderId
 }
 
-function onDragLeave(event: DragEvent) {
+function onDragLeave(_event: DragEvent) {
   // handled by parent
 }
 
