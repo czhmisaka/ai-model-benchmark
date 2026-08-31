@@ -242,8 +242,13 @@ def _collect_descendant_folder_ids(cursor, folder_id):
 # ===== 配置管理 API =====
 
 @app.get("/config")
-async def get_config():
-    """获取当前配置 - 从数据库读取"""
+async def get_config(full: str = ""):
+    """获取当前配置 - 从数据库读取
+
+    默认轻量模式：超过 2000 字符的 messages 替换为占位符（减少 9MB 响应），
+    传 ?full=1 获取完整内容。编辑用例时请用 GET /config/test-cases/{id}/full。
+    """
+    full_mode = full == "1"
     import json
     from pathlib import Path
     import sqlite3
@@ -313,6 +318,27 @@ async def get_config():
                 else:
                     metadata = {}
                 
+                # light mode: truncate oversized messages
+                if not full_mode:
+                    msg_json = json.dumps(messages, ensure_ascii=False) if messages else ""
+                    if len(msg_json) > 2000:
+                        messages = [{"role": "user", "content": "[TRUNCATED - use /config/test-cases/id/full]"}]
+                        metadata = dict(metadata or {})
+                        metadata["messages_truncated"] = True
+                # light mode: truncate oversized messages
+                if not full_mode:
+                    msg_json = json.dumps(messages, ensure_ascii=False) if messages else ""
+                    if len(msg_json) > 2000:
+                        messages = [{"role": "user", "content": "[TRUNCATED]"}]
+                        metadata = dict(metadata or {})
+                        metadata["messages_truncated"] = True
+                # light mode: truncate oversized messages
+                if not full_mode:
+                    msg_json = json.dumps(messages, ensure_ascii=False) if messages else ""
+                    if len(msg_json) > 2000:
+                        messages = [{"role": "user", "content": "[TRUNCATED]"}]
+                        metadata = dict(metadata or {})
+                        metadata["messages_truncated"] = True
                 test_cases.append({
                     "id": row["case_id"],
                     "name": row["name"],
@@ -2921,3 +2947,52 @@ async def delete_webhook_config():
     if _save_webhook_config({}):
         return {"success": True}
     return {"success": False, "error": "删除失败（config.db 不可写）"}
+
+@app.get("/config/test-cases/{case_id}/full")
+async def get_test_case_full(case_id: str):
+    """获取单个测试用例的完整内容（含未截断的 messages）"""
+    import json as _json
+    from pathlib import Path
+    import sqlite3
+
+    config_db_path = Path(__file__).parent.parent / "results" / "config.db"
+    conn = sqlite3.connect(str(config_db_path))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM test_cases WHERE case_id = ?", (case_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise AppError(404, "测试用例不存在")
+
+    messages = row["messages"]
+    if messages:
+        try:
+            messages = json.loads(messages)
+        except (json.JSONDecodeError, TypeError):
+            messages = []
+
+    metadata = row["metadata"]
+    if metadata:
+        try:
+            metadata = json.loads(metadata)
+        except (json.JSONDecodeError, TypeError):
+            metadata = {}
+
+    conn.close()
+    return {
+        "id": row["case_id"],
+        "name": row["name"],
+        "type": row["type"],
+        "description": row["description"],
+        "tags": json.loads(row["tags"]) if row["tags"] else [],
+        "version": row["version"],
+        "max_tokens": row["max_tokens"] or 2000,
+        "temperature": row["temperature"] or 0.7,
+        "stream": bool(row["stream"]) if row["stream"] is not None else True,
+        "system_prompt": row["system_prompt"],
+        "messages": messages,
+        "metadata": metadata,
+        "enabled": bool(row["enabled"]),
+        "expected_output": row["expected_output"] or "",
+        "eval_model": row["eval_model"] or "",
+        "folder_id": row["folder_id"],
+    }

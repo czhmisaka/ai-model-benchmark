@@ -317,7 +317,7 @@ class WebAwareTester:
             from web.app import _test_running
             if not _test_running:
                 return True
-        except:
+        except Exception:
             pass
         return False
     
@@ -1097,7 +1097,7 @@ async def run_tests_with_web(
                 # 确保关闭客户端
                 try:
                     await test_client.close()
-                except:
+                except Exception:
                     pass
         
         # 获取客户端的模型配置

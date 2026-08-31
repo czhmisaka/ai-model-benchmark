@@ -30,7 +30,7 @@ class ReportGenerator:
         
         self._jinja_env = Environment(
             loader=FileSystemLoader(str(self.template_dir)),
-            autoescape=select_autoescape(enabled_extensions=()),
+            autoescape=select_autoescape(default_for_string=True, default=True),
             trim_blocks=True,
             lstrip_blocks=True,
         )

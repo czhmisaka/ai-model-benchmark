@@ -2517,9 +2517,9 @@ async function confirmStartTest() {
   const modelsToTest = Array.from(selectedModels.value)
   const casesToTest = Array.from(selectedCases.value)
   
-  console.log('[Start] Models:', modelsToTest)
-  console.log('[Start] Cases:', casesToTest)
-  console.log('[Start] Config:', startConfig)
+  // console.log('[Start] Models:', modelsToTest)
+  // console.log('[Start] Cases:', casesToTest)
+  // console.log('[Start] Config:', startConfig)
   
   try {
     const res = await fetchWithTimeout('/test/start', {
@@ -2540,7 +2540,7 @@ async function confirmStartTest() {
       return
     }
     
-    console.log('[Start] Response:', result)
+    // console.log('[Start] Response:', result)
     
     if (result.config) {
       const { models, cases, total_rounds, concurrency } = result.config
@@ -3400,7 +3400,7 @@ function handleEvent(event: any) {
     case 'complete':
       // 兜底：flush 该任务残留的 chunk 缓冲，确保输出完整
       flushChunkBuffer()
-      console.log('[complete event] prompt:', data.prompt, 'response length:', data.response?.length)
+      // console.log('[complete event] prompt:', data.prompt, 'response length:', data.response?.length)
       if (taskId && tasks.value[taskId] && subTaskId && tasks.value[taskId].sub_tasks[subTaskId]) {
         tasks.value[taskId].sub_tasks[subTaskId].status = data.success ? 'done' : 'error'
         tasks.value[taskId].sub_tasks[subTaskId].metrics = {
@@ -3416,14 +3416,14 @@ function handleEvent(event: any) {
           answerSpeed: data.metrics?.answer_tokens_per_second?.toFixed(1) || '--'
         }
         // 保存 prompt 和 response 用于详情显示
-        console.log('[complete] saving prompt:', data.prompt ? 'yes' : 'no', 'response:', data.response ? 'yes' : 'no')
+        // console.log('[complete] saving prompt:', data.prompt ? 'yes' : 'no', 'response:', data.response ? 'yes' : 'no')
         if (data.prompt) {
           tasks.value[taskId].sub_tasks[subTaskId].prompt = data.prompt
-          console.log('[complete] prompt saved:', data.prompt.substring(0, 50))
+          // console.log('[complete] prompt saved:', data.prompt.substring(0, 50))
         }
         if (data.response) {
           tasks.value[taskId].sub_tasks[subTaskId].output = data.response
-          console.log('[complete] response saved, length:', data.response.length)
+          // console.log('[complete] response saved, length:', data.response.length)
         }
         // 保存多模态输入图片（来自 recorder.record 的 input_images）
         if (data.input_images && data.input_images.length) {
@@ -3435,16 +3435,16 @@ function handleEvent(event: any) {
         // 保存分离的 think 和 answer 内容
         if (data.think_content) {
           tasks.value[taskId].sub_tasks[subTaskId].think_content = data.think_content
-          console.log('[complete] think_content saved, length:', data.think_content.length)
+          // console.log('[complete] think_content saved, length:', data.think_content.length)
         }
         if (data.answer_content) {
           tasks.value[taskId].sub_tasks[subTaskId].answer_content = data.answer_content
-          console.log('[complete] answer_content saved, length:', data.answer_content.length)
+          // console.log('[complete] answer_content saved, length:', data.answer_content.length)
         }
         // 保存校对结果（如果存在）
         if (data.evaluation) {
           tasks.value[taskId].sub_tasks[subTaskId].evaluation = data.evaluation
-          console.log('[complete] evaluation saved:', JSON.stringify(data.evaluation))
+          // console.log('[complete] evaluation saved:', JSON.stringify(data.evaluation))
         }
         
         // 检查所有轮次是否都已完成
@@ -3550,7 +3550,7 @@ async function loadTestState() {
     const taskKeys = Object.keys(savedTasks)
     
     if (taskKeys.length > 0) {
-      console.log(`[State] 恢复 ${taskKeys.length} 个任务状态`)
+      // console.log(`[State] 恢复 ${taskKeys.length} 个任务状态`)
       
       for (const [taskId, taskData] of Object.entries(savedTasks) as [string, any][]) {
         const modelName = taskData.model_name

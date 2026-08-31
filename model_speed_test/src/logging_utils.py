@@ -245,7 +245,7 @@ class StructuredLogger:
                     if level and entry_data.get("level") != level:
                         continue
                     logs.append(LogEntry(**entry_data))
-                except:
+                except Exception:
                     continue
         
         return logs[-limit:]
