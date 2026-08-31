@@ -234,6 +234,9 @@ class TestMetrics:
     timestamps: List[float] = field(default_factory=list)
     chunk_contents: List[str] = field(default_factory=list)
     
+    # Token 计数来源（"api_usage"=API返回精确值 | "tiktoken_estimate"=本地重算）
+    tokens_source: str = "tiktoken_estimate"
+    
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -251,6 +254,8 @@ class TestMetrics:
             "answer_tokens": self.answer_tokens,
             "think_tokens_per_second": round(self.think_tokens_per_second, 2),
             "answer_tokens_per_second": round(self.answer_tokens_per_second, 2),
+            # Token 计数来源
+            "tokens_source": self.tokens_source,
         }
 
 
@@ -395,15 +400,33 @@ class MetricsCalculator:
         # 优先使用 API 返回的准确值
         if chunks and "output_tokens" in chunks[-1] and chunks[-1].get("output_tokens"):
             total_output_tokens = chunks[-1].get("output_tokens", 0)
+            metrics.tokens_source = "api_usage"
         elif chunks and "usage" in chunks[-1]:
             usage = chunks[-1].get("usage", {})
             total_output_tokens = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0)
+            if total_output_tokens:
+                metrics.tokens_source = "api_usage"
+            else:
+                # usage 存在但无有效值 → 回退 tiktoken 重算
+                full_content = "".join(contents)
+                total_output_tokens = count_tokens(full_content)
+                metrics.tokens_source = "tiktoken_estimate"
         else:
             # 回退：使用 tiktoken 精确计算
             full_content = "".join(contents)
             total_output_tokens = count_tokens(full_content)
+            metrics.tokens_source = "tiktoken_estimate"
         
         metrics.output_tokens = total_output_tokens
+        
+        # Answer Tokens = 总输出 - Think Tokens（如果检测到 think）
+        if metrics.think_tokens > 0:
+            metrics.answer_tokens = max(0, total_output_tokens - metrics.think_tokens)
+        else:
+            # 没有 think 部分，所有都是 answer
+            metrics.answer_tokens = total_output_tokens
+        
+        return metrics
         
         # Answer Tokens = 总输出 - Think Tokens（如果检测到 think）
         if metrics.think_tokens > 0:

@@ -583,32 +583,19 @@ class TestEventEmitter:
         try:
             from src.async_io import run_in_executor
             
-            # 获取当前统计（线程池执行，避免阻塞事件循环）
-            results = await run_in_executor(self._db.get_results, group_id)
-            success_count = sum(1 for r in results if r.get("success", 0) == 1)
-            failed_count = len(results) - success_count
+            # 增量更新（单条 UPDATE），避免每轮全表 SELECT COUNT 的写放大
+            await run_in_executor(self._db.increment_group_progress, group_id, success)
             
-            # 检查是否全部完成
+            # 查询是否全部完成（轻量：仅取组信息）
             group = await run_in_executor(self._db.get_group, group_id)
-            total_rounds = group.get("total_rounds", 0) if group else 0
-            completed_rounds = len(results)
-            
-            # 确定状态
-            if completed_rounds >= total_rounds and total_rounds > 0:
-                status = "completed"
-            else:
-                status = "running"
-            
-            # 更新 test_groups 表
-            await run_in_executor(
-                self._db.update_group,
-                group_id=group_id,
-                status=status,
-                completed_rounds=completed_rounds,
-                success_count=success_count,
-                failed_count=failed_count
-            )
-            print(f"[Emitter] 已更新测试组进度: {group_id}, 完成: {completed_rounds}/{total_rounds}, 状态: {status}")
+            if group:
+                total_rounds = group.get("total_rounds", 0)
+                completed_rounds = (group.get("completed_rounds", 0) or 0)
+                if total_rounds > 0 and completed_rounds >= total_rounds:
+                    await run_in_executor(
+                        self._db.update_group_status, group_id, "completed"
+                    )
+            print(f"[Emitter] 已增量更新测试组进度: {group_id}")
         except Exception as e:
             print(f"[Emitter] 更新测试组进度失败: {e}")
 

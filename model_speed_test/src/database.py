@@ -595,6 +595,26 @@ class TestDatabase:
         cursor.execute("UPDATE test_groups SET status = ? WHERE group_id = ?", (status, group_id))
         conn.commit()
         conn.close()
+
+    def increment_group_progress(self, group_id: str, success: bool):
+        """增量更新测试组进度（每轮完成后调用，避免全表 COUNT）
+
+        对比 _update_group_progress（emitter 侧）的全量 SELECT + UPDATE，
+        本方法单条 UPDATE 完成，减少并发写放大。
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE test_groups SET
+                    completed_rounds = completed_rounds + 1,
+                    success_count = success_count + ?,
+                    failed_count = failed_count + ?
+                WHERE group_id = ?
+            """, (1 if success else 0, 0 if success else 1, group_id))
+            conn.commit()
+        finally:
+            conn.close()
     
     def _delete_group_files(self, group_id: str):
         """删除测试组对应的本地文件

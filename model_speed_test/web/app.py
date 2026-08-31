@@ -54,12 +54,42 @@ def require_auth():
     return dependency
 
 
+# ===== 统一错误处理 =====
+import logging
+
+logger = logging.getLogger("web.app")
+
+
+class AppError(Exception):
+    """业务错误：带 HTTP 状态码的可预期错误
+
+    使用方式：raise AppError(404, "测试组不存在")
+    服务端记录完整堆栈，客户端只收到通用文案。
+    """
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(message)
+
+
 # 创建 FastAPI 应用
 app = FastAPI(
     title="AI模型速度测试",
     description="实时可视化测试进度和流式输出",
     version="1.0.0"
 )
+
+
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError):
+    """业务错误：返回规范的 HTTP 状态码 + 通用文案"""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.message},
+    )
+
+
 
 # 获取 web 模块目录
 WEB_DIR = Path(__file__).parent
@@ -269,7 +299,7 @@ async def get_config():
                 if messages:
                     try:
                         messages = json.loads(messages)
-                    except:
+                    except (json.JSONDecodeError, TypeError):
                         messages = []
                 else:
                     messages = []
@@ -278,7 +308,7 @@ async def get_config():
                 if metadata:
                     try:
                         metadata = json.loads(metadata)
-                    except:
+                    except (json.JSONDecodeError, TypeError):
                         metadata = {}
                 else:
                     metadata = {}
@@ -424,7 +454,8 @@ async def add_model(model_data: dict):
         else:
             raise Exception("config.db not found")
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.put("/config/models/{model_name}")
@@ -547,7 +578,8 @@ async def update_model(model_name: str, model_data: dict):
         else:
             raise Exception("config.db not found")
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.delete("/config/models/{model_name}")
@@ -602,7 +634,8 @@ async def delete_model(model_name: str):
         else:
             raise Exception("config.db not found")
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.post("/config/models/ping")
@@ -691,7 +724,7 @@ async def ping_model_direct(model_data: dict):
             except Exception as e:
                 try:
                     await client.close()
-                except:
+                except Exception:
                     pass
                 return {
                     "success": False,
@@ -705,7 +738,8 @@ async def ping_model_direct(model_data: dict):
             }
             
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.post("/config/models/{model_name}/ping")
@@ -820,7 +854,7 @@ async def ping_model(model_name: str):
             except Exception as e:
                 try:
                     await client.close()
-                except:
+                except Exception:
                     pass
                 return {
                     "success": False,
@@ -834,7 +868,8 @@ async def ping_model(model_name: str):
             }
             
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.post("/config/test-cases")
@@ -920,7 +955,7 @@ async def add_test_case(test_case_data: dict):
                 if messages:
                     try:
                         messages = json.loads(messages)
-                    except:
+                    except (json.JSONDecodeError, TypeError):
                         messages = []
                 else:
                     messages = []
@@ -929,7 +964,7 @@ async def add_test_case(test_case_data: dict):
                 if metadata:
                     try:
                         metadata = json.loads(metadata)
-                    except:
+                    except (json.JSONDecodeError, TypeError):
                         metadata = {}
                 else:
                     metadata = {}
@@ -956,7 +991,8 @@ async def add_test_case(test_case_data: dict):
         else:
             raise Exception("config.db not found")
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.put("/config/test-cases/{test_case_id}/move")
@@ -1008,7 +1044,7 @@ async def move_test_case(test_case_id: str, move_data: dict):
                 if messages:
                     try:
                         messages = json.loads(messages)
-                    except:
+                    except (json.JSONDecodeError, TypeError):
                         messages = []
                 else:
                     messages = []
@@ -1017,7 +1053,7 @@ async def move_test_case(test_case_id: str, move_data: dict):
                 if metadata:
                     try:
                         metadata = json.loads(metadata)
-                    except:
+                    except (json.JSONDecodeError, TypeError):
                         metadata = {}
                 else:
                     metadata = {}
@@ -1047,7 +1083,8 @@ async def move_test_case(test_case_id: str, move_data: dict):
         else:
             return {"error": "config.db not found"}
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.put("/config/test-cases/{test_case_id}")
@@ -1140,7 +1177,7 @@ async def update_test_case(test_case_id: str, test_case_data: dict):
                 if messages:
                     try:
                         messages = json.loads(messages)
-                    except:
+                    except (json.JSONDecodeError, TypeError):
                         messages = []
                 else:
                     messages = []
@@ -1149,7 +1186,7 @@ async def update_test_case(test_case_id: str, test_case_data: dict):
                 if metadata:
                     try:
                         metadata = json.loads(metadata)
-                    except:
+                    except (json.JSONDecodeError, TypeError):
                         metadata = {}
                 else:
                     metadata = {}
@@ -1176,7 +1213,8 @@ async def update_test_case(test_case_id: str, test_case_data: dict):
         else:
             raise Exception("config.db not found")
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.put("/config/system")
@@ -1221,7 +1259,8 @@ async def update_system_config(request: Request):
         else:
             raise Exception("config.db not found")
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 # ===== 测试用例文件夹管理 API =====
@@ -1248,7 +1287,8 @@ async def get_test_case_folders():
         else:
             return {"error": "config.db not found"}
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.post("/config/test-case-folders")
@@ -1294,7 +1334,8 @@ async def create_test_case_folder(folder_data: dict):
         else:
             return {"error": "config.db not found"}
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.put("/config/test-case-folders/{folder_id}")
@@ -1373,7 +1414,8 @@ async def update_test_case_folder(folder_id: str, folder_data: dict):
         else:
             return {"error": "config.db not found"}
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.delete("/config/test-case-folders/{folder_id}")
@@ -1422,7 +1464,8 @@ async def delete_test_case_folder(folder_id: str):
         else:
             return {"error": "config.db not found"}
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.delete("/config/test-cases/{test_case_id}")
@@ -1461,7 +1504,7 @@ async def delete_test_case(test_case_id: str):
                 if messages:
                     try:
                         messages = json.loads(messages)
-                    except:
+                    except (json.JSONDecodeError, TypeError):
                         messages = []
                 else:
                     messages = []
@@ -1470,7 +1513,7 @@ async def delete_test_case(test_case_id: str):
                 if metadata:
                     try:
                         metadata = json.loads(metadata)
-                    except:
+                    except (json.JSONDecodeError, TypeError):
                         metadata = {}
                 else:
                     metadata = {}
@@ -1497,7 +1540,8 @@ async def delete_test_case(test_case_id: str):
         else:
             raise Exception("config.db not found")
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 # 测试控制
@@ -1949,8 +1993,8 @@ async def start_test(request: Request):
     
     try:
         body = await request.json()
-    except:
-        body = {}
+    except Exception:
+        body = {}  # invalid json body tolerated
     
     model_names = body.get("models", [])
     case_ids = body.get("cases", [])
@@ -2011,7 +2055,7 @@ async def start_test(request: Request):
                     if messages:
                         try:
                             messages = json.loads(messages)
-                        except:
+                        except (json.JSONDecodeError, TypeError):
                             messages = []
                     else:
                         messages = []
@@ -2020,7 +2064,7 @@ async def start_test(request: Request):
                     if metadata:
                         try:
                             metadata = json.loads(metadata)
-                        except:
+                        except (json.JSONDecodeError, TypeError):
                             metadata = {}
                     else:
                         metadata = {}
@@ -2415,7 +2459,7 @@ async def get_history(
             if g.get("config_json"):
                 try:
                     g["config"] = json.loads(g["config_json"])
-                except:
+                except Exception:
                     pass
         
         return {
@@ -2426,7 +2470,8 @@ async def get_history(
             "offset": offset
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.get("/api/history/{group_id}")
@@ -2449,7 +2494,8 @@ async def get_history_detail(group_id: str):
             "data": summary
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.get("/api/history/{group_id}/results")
@@ -2473,7 +2519,8 @@ async def get_history_results(group_id: str, model_name: str = None, test_case_n
             "data": results
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.get("/api/history/{group_id}/summary")
@@ -2496,7 +2543,8 @@ async def get_history_summary(group_id: str):
             "data": summary
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.delete("/api/history/{group_id}")
@@ -2516,7 +2564,8 @@ async def delete_history(group_id: str):
             "message": "删除成功" if deleted else "删除失败"
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.put("/api/history/{group_id}")
@@ -2544,7 +2593,8 @@ async def update_history(group_id: str, request: Request):
         
         return {"success": True}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.get("/api/models")
@@ -2570,7 +2620,8 @@ async def get_models():
             "data": models
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 # 挂载前端静态文件
@@ -2612,11 +2663,13 @@ async def generate_pdf_report(group_id: str, template: str = "default"):
             headers={"Content-Disposition": f"attachment; filename=report_{group_id}.pdf"}
         )
     except ValueError as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
     except ImportError as e:
         return {"success": False, "error": f"依赖未安装: {str(e)}"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.get("/api/history/{group_id}/report/excel")
@@ -2632,11 +2685,13 @@ async def generate_excel_report(group_id: str):
             headers={"Content-Disposition": f"attachment; filename=report_{group_id}.xlsx"}
         )
     except ValueError as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
     except ImportError as e:
         return {"success": False, "error": f"依赖未安装: {str(e)}"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.get("/api/report/templates")
@@ -2648,7 +2703,8 @@ async def list_report_templates():
         templates = generator.list_templates()
         return {"success": True, "data": templates}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.get("/api/history/{group_id}/report/all")
@@ -2720,7 +2776,8 @@ async def export_all_reports(group_id: str, template: str = "default"):
     except ImportError as e:
         return {"success": False, "error": f"依赖未安装: {str(e)}"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 @app.get("/api/history/{group_id}/report/markdown")
@@ -2757,7 +2814,8 @@ async def get_markdown_report(group_id: str, template: str = "default"):
         content = generator.generate_markdown({"summary": summary, "results": results, "model_stats": formatted_stats}, template_name=template)
         return {"success": True, "content": content, "stats": {"total": total, "successRate": round(success_rate, 1), "avgTtft": round(avg_ttft * 1000, 2), "avgTps": round(avg_tps, 2)}}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("[App] request failed")
+        raise AppError(500, "internal error, see server log")
 
 
 # ===== Webhook 配置端点（SDK 兼容） =====
