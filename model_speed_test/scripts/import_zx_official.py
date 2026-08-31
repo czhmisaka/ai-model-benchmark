@@ -24,16 +24,16 @@ ROOT = Path(__file__).parent.parent
 DB_FILE = ROOT / "results" / "config.db"
 
 DIM_LABELS = {
-    "reasoning_math": "官方-数学推理",
-    "hallucination_resistance": "官方-幻觉抵抗",
-    "safety_authority": "官方-安全权限",
-    "data_extraction": "官方-数据抽取",
-    "structured_output": "官方-结构化输出",
-    "instruction_following": "官方-指令遵循",
-    "agent_workflow": "官方-智能体",
-    "tool_cli_workflow": "官方-工具CLI",
-    "cli_deep_tasks": "官方-深度CLI",
-    "program": "官方-编程",
+    "reasoning_math": "数学推理",
+    "hallucination_resistance": "幻觉抵抗",
+    "safety_authority": "安全权限",
+    "data_extraction": "数据抽取",
+    "structured_output": "结构化输出",
+    "instruction_following": "指令遵循",
+    "agent_workflow": "智能体",
+    "tool_cli_workflow": "工具CLI",
+    "cli_deep_tasks": "深度CLI",
+    "program": "编程",
 }
 
 SKIP_GRADERS = {"project_repair", "sandbox"}  # 本平台无执行环境，跳过
@@ -108,7 +108,7 @@ def main():
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    # 文件夹结构：官方-<维度> 平铺（不建子级，保持简单）
+    # 文件夹结构：<维度> 平铺（不建子级，保持简单）
     folder_map = {}
     def _ensure_folder(name):
         cursor.execute(
