@@ -1057,7 +1057,7 @@ async def run_tests_with_web(
     # 用例级并发信号量：限制同一时刻正在执行的请求总数
     # （web/app.py 会传入跨模型共享的信号量；CLI 直调时自建）
     if case_semaphore is None:
-        case_semaphore = asyncio.Semaphore(max(1, int(max_concurrent)))
+        case_semaphore = asyncio.Semaphore(99999 if int(max_concurrent or 0) <= 0 else max(1, int(max_concurrent)))
     
     # 遍历每个模型，并发执行所有测试用例
     for client in clients:

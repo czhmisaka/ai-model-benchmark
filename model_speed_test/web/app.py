@@ -359,7 +359,6 @@ async def get_config(full: str = ""):
             # 获取文件夹树形结构
             folders = _load_folders_tree(cursor)
             
-            conn.close()
             
             # 从数据库读取并发配置
             concurrency = {"test_rounds": 10, "interval": 1, "max_concurrent": 3, "num_requests": 1}
@@ -378,6 +377,7 @@ async def get_config(full: str = ""):
             except Exception as e:
                 print(f"从数据库读取系统配置失败: {e}")
             
+            conn.close()
             return {
                 "version": "1.0.0",
                 "models": models,
@@ -2270,7 +2270,7 @@ async def start_test(request: Request):
 
             # 跨模型共享并发信号量：所有模型的在途请求总数受 max_concurrent 约束
             max_conc = int((config.get("concurrency", {}) or {}).get("max_concurrent", 3) or 3)
-            shared_semaphore = asyncio.Semaphore(max(1, max_conc))
+            shared_semaphore = asyncio.Semaphore(99999 if max_conc <= 0 else max(1, max_conc))
 
             # 为每个 (model, test_case) 组合创建独立任务
             tasks = []

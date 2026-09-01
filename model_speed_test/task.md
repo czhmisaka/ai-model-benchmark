@@ -81,3 +81,9 @@
 ### 模型归档（已完成）
 - [x] 44 个模型按具体模型家族分类归档（19 组）：MiniMax-M2.5/2.7/3 系列、DeepSeek-V4 系列（Flash/Pro/火山接入）、Qwen3.5/3.6/3.8/VL/32b 系列、GLM 系列、Kimi 系列、GPT 系列、小米 MiMo 系列、华电大模型、NVIDIA Nemotron 系列、本地部署(Mac)、Embedding 模型
 - [ ] 前端模型列表目前为扁平渲染（group_name 字段已有数据，树形分组 UI 留待后续）
+
+### 并发限制（2026-08-31 调整）
+
+- [x] 并发限制已关闭：max_concurrent=0，所有用例全并发执行
+- [x] 修复：GET /config 的 conn.close() 位置错误导致并发配置读取失效（cursor 在关闭的连接上执行，异常被吞，永远返回默认值 3）
+- [ ] 恢复限制：将设置里 max_concurrent 改回目标值即可
