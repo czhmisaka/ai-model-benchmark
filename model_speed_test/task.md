@@ -72,3 +72,12 @@
 
 - [ ] 官方题批量配置校对模型：脚本或端点一键为 553 题设置 eval_model（当前仅 8 题配置）
 - [ ] 长上下文题的 expected_output 建议补充 needle 精确匹配模式（而非 AI 校对，降低不确定性）
+
+### 模型归档（已完成）
+
+- [x] 44 个模型按具体模型家族分类归档（19 组）：MiniMax-M2.5/2.7/3 系列、DeepSeek-V4 系列（Flash/Pro/火山接入）、Qwen3.5/3.6/3.8/VL/32b 系列、GLM 系列、Kimi 系列、GPT 系列、小米 MiMo 系列、华电大模型、NVIDIA Nemotron 系列、本地部署(Mac)、Embedding 模型
+- [ ] 前端模型列表目前为扁平渲染（group_name 字段已有数据，树形分组 UI 留待后续）
+
+### 模型归档（已完成）
+- [x] 44 个模型按具体模型家族分类归档（19 组）：MiniMax-M2.5/2.7/3 系列、DeepSeek-V4 系列（Flash/Pro/火山接入）、Qwen3.5/3.6/3.8/VL/32b 系列、GLM 系列、Kimi 系列、GPT 系列、小米 MiMo 系列、华电大模型、NVIDIA Nemotron 系列、本地部署(Mac)、Embedding 模型
+- [ ] 前端模型列表目前为扁平渲染（group_name 字段已有数据，树形分组 UI 留待后续）
