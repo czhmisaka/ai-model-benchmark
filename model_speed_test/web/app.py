@@ -2200,7 +2200,8 @@ async def start_test(request: Request):
                 cursor = conn.cursor()
                 cursor.execute("SELECT key, value FROM system_config")
                 for row in cursor.fetchall():
-                    if row["key"] == "concurrency" and test_rounds is None and max_concurrent is None and interval is None:
+                    if row["key"] == "concurrency":
+                        # DB 配置无条件覆盖默认值（前端显式传参在后面再覆盖 DB）
                         config["concurrency"] = json.loads(row["value"])
                     elif row["key"] == "output" and "output" not in config:
                         config["output"] = json.loads(row["value"])
@@ -2269,7 +2270,8 @@ async def start_test(request: Request):
                 asyncio.set_event_loop(loop)
 
             # 跨模型共享并发信号量：所有模型的在途请求总数受 max_concurrent 约束
-            max_conc = int((config.get("concurrency", {}) or {}).get("max_concurrent", 3) or 3)
+            raw_mc = (config.get("concurrency", {}) or {}).get("max_concurrent", 3)
+            max_conc = int(raw_mc) if raw_mc is not None else 3
             shared_semaphore = asyncio.Semaphore(99999 if max_conc <= 0 else max(1, max_conc))
 
             # 为每个 (model, test_case) 组合创建独立任务
