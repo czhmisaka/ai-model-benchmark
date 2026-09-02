@@ -38,6 +38,14 @@
         <div class="form-hint">每轮测试之间的等待时间</div>
       </div>
       <div class="form-group">
+        <label class="form-label">校对模型（可选，覆盖用例级配置）</label>
+        <select class="form-input" v-model="config.eval_model">
+          <option value="">不使用校对</option>
+          <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
+        </select>
+        <div class="form-hint">指定后所有用例统一使用此模型进行AI校对</div>
+      </div>
+      <div class="form-group">
         <label class="form-label">测试名称（可选）</label>
         <input type="text" class="form-input" v-model="config.test_name" placeholder="自动生成" />
         <div class="form-hint">用于标识这次测试，方便历史记录查找</div>
@@ -58,6 +66,7 @@ interface StartConfig {
   max_concurrent: number
   interval: number
   test_name: string
+  eval_model: string
 }
 
 interface TestCase {
@@ -78,12 +87,14 @@ interface Props {
   testCases?: TestCase[]
   folders?: TreeNode[]
   selectedCases?: Set<string>
+  availableModels?: string[]
 }
 
 const props = withDefaults(defineProps<Props>(), {
   testCases: () => [],
   folders: () => [],
-  selectedCases: () => new Set()
+  selectedCases: () => new Set(),
+  availableModels: () => []
 })
 
 defineEmits<{

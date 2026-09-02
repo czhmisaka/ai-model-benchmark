@@ -300,13 +300,15 @@ class WebAwareTester:
         group_id: str = None, 
         stop_event: asyncio.Event = None, 
         timeout: float = 300.0,
-        eval_model_config: Dict[str, Any] = None
+        eval_model_config: Dict[str, Any] = None,
+        eval_model_global: str = None
     ):
         self.enable_web = enable_web
         self.group_id = group_id
         self.stop_event = stop_event
         self.timeout = timeout  # 超时时间（秒），默认300秒
         self.eval_model_config = eval_model_config  # 校对模型配置
+        self.eval_model_global = eval_model_global  # 全局校对模型（优先于用例级）
     
     def should_stop(self) -> bool:
         """检查是否应该停止"""
@@ -335,14 +337,15 @@ class WebAwareTester:
         system_prompt = test_case.get("system_prompt")
         test_case_name = test_case.get("name", "未命名")
         
-        # 获取校对相关配置
-        eval_model = test_case.get("eval_model")  # 校对模型名称
+        # 获取校对相关配置（全局校对模型优先于用例级配置）
+        eval_model = self.eval_model_global or test_case.get("eval_model")  # 校对模型名称
         expected_output = test_case.get("expected_output")  # 标准答案
         
         # 检查是否需要校对
         needs_verification = bool(eval_model and expected_output)
         if needs_verification:
-            print(f"📋 校对配置: eval_model={eval_model}, expected_output已配置")
+            src = '全局' if self.eval_model_global else '用例级'
+            print(f"📋 校对配置({src}): eval_model={eval_model}, expected_output已配置")
         
         test_config = {
             "max_tokens": test_case.get("max_tokens", 500),
@@ -919,7 +922,8 @@ async def run_tests_with_web(
     test_cases: List[Dict[str, Any]] = None,
     enable_web: bool = True,
     stop_event: asyncio.Event = None,
-    case_semaphore: asyncio.Semaphore = None
+    case_semaphore: asyncio.Semaphore = None,
+    eval_model_global: str = None
 ):
     """运行测试 - 支持 Web 推送"""
     from datetime import datetime
@@ -1049,7 +1053,8 @@ async def run_tests_with_web(
         enable_web=enable_web, 
         group_id=group_id, 
         stop_event=stop_event,
-        eval_model_config={"models": models_config}  # 传递模型列表供校对时查找
+        eval_model_config={"models": models_config},  # 传递模型列表供校对时查找
+        eval_model_global=eval_model_global  # 全局校对模型（覆盖用例级配置）
     )
 
     # 获取最大并发数

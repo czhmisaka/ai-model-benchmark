@@ -475,6 +475,7 @@
       :testCases="config.test_cases || []"
       :folders="config.folders || []"
       :selectedCases="selectedCases"
+      :availableModels="(config.models || []).map((m: any) => m.name)"
       @cancel="hideStartConfig"
       @confirm="confirmStartTest"
     />
@@ -1067,7 +1068,8 @@ const startConfig = reactive({
   test_rounds: 30,
   max_concurrent: 0,
   interval: 0.1,
-  test_name: ''
+  test_name: '',
+  eval_model: ''  // 全局校对模型（空=不使用）
 })
 
 // 任务详情
@@ -2531,7 +2533,8 @@ async function confirmStartTest() {
         test_rounds: startConfig.test_rounds,
         max_concurrent: startConfig.max_concurrent,
         interval: startConfig.interval,
-        test_name: startConfig.test_name
+        test_name: startConfig.test_name,
+        eval_model: startConfig.eval_model || null
       })
     })
     const result = await res.json()

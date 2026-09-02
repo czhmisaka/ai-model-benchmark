@@ -2046,6 +2046,7 @@ async def start_test(request: Request):
     max_concurrent = body.get("max_concurrent", None)  # 最大并发数
     interval = body.get("interval", None)  # 请求间隔
     test_name = body.get("test_name", None)  # 测试名称
+    eval_model_global = body.get("eval_model", None)  # 全局校对模型（覆盖用例级配置）
     
     # 创建新的停止事件
     stop_event = create_stop_event()
@@ -2285,7 +2286,8 @@ async def start_test(request: Request):
                         test_cases,
                         enable_web=True,
                         stop_event=stop_event,
-                        case_semaphore=shared_semaphore
+                        case_semaphore=shared_semaphore,
+                        eval_model_global=eval_model_global
                     )
                 )
                 tasks.append(task)
