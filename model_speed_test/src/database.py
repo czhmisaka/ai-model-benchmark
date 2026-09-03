@@ -16,12 +16,16 @@ class TestDatabase:
     # pytest 会收集 Test* 命名的类，标记为非测试类（数据类有 __init__）
     __test__ = False
     
-    DB_PATH = "results/test_results.db"
+    # 锚定到项目根目录，避免依赖进程 CWD（CWD 被删除/切换会导致 “unable to open database file”）
+    DB_PATH = str(Path(__file__).resolve().parent.parent / "results" / "test_results.db")
     
     def __init__(self, db_path: str = None):
         """初始化数据库"""
         if db_path:
-            self.DB_PATH = db_path
+            p = Path(db_path)
+            if not p.is_absolute():
+                p = Path(__file__).resolve().parent.parent / p
+            self.DB_PATH = str(p)
         
         # 确保目录存在
         db_file = Path(self.DB_PATH)

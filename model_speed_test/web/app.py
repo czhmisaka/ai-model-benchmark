@@ -362,7 +362,7 @@ async def get_config(full: str = ""):
             
             # 从数据库读取并发配置
             concurrency = {"test_rounds": 10, "interval": 1, "max_concurrent": 3, "num_requests": 1}
-            output = {"results_dir": "results", "save_detailed_logs": True, "save_io_records": True, "export_csv": True, "export_jsonl": True}
+            output = {"results_dir": str(Path(__file__).resolve().parent.parent / "results"), "save_detailed_logs": True, "save_io_records": True, "export_csv": True, "export_jsonl": True}
             thresholds = {"ttft_max": 10, "min_tokens_per_sec": 10, "max_total_time": 60}
             
             try:
@@ -2074,7 +2074,7 @@ async def start_test(request: Request):
             "models": [],
             "test_cases": [],
             "concurrency": {"test_rounds": 10, "interval": 1, "max_concurrent": 3},
-            "output": {"results_dir": "results"}
+            "output": {"results_dir": str(Path(__file__).resolve().parent.parent / "results")}
         }
         
         # 从数据库读取测试用例

@@ -43,7 +43,7 @@ class IORecorder:
 
     def __init__(
         self,
-        results_dir: str = "results",
+        results_dir: str = str(Path(__file__).resolve().parent.parent / "results"),
         save_detailed: bool = True,
         group_id: str = None,
         task_name: str = None,
