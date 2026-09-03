@@ -87,3 +87,10 @@
 - [x] 并发限制已关闭：max_concurrent=0，所有用例全并发执行
 - [x] 修复：GET /config 的 conn.close() 位置错误导致并发配置读取失效（cursor 在关闭的连接上执行，异常被吞，永远返回默认值 3）
 - [ ] 恢复限制：将设置里 max_concurrent 改回目标值即可
+
+
+### CWD 失效事故（2026-09-03 修复）
+- [x] 症状：UI 启动测试返回成功，但模型侧收不到任何请求；/api/history 500
+- [x] 根因：后端进程工作目录被删除/重建后失效（lsof 显示 cwd 已不存在），而 results/test_results.db、results_dir 用相对路径 → 启动时 创建测试组失败: unable to open database file，测试线程在发请求前就静默失败
+- [x] 修复：src/database.py DB_PATH、web/app.py results_dir、src/recorder.py 默认目录全部锚定 Path(__file__) 项目根；重启后端（commit 2231cbe）
+- [ ] 待办：排查 aiohttp ClientSession 未 close 泄漏（日志大量 Unclosed client session，长时间运行会再次耗尽文件句柄）
