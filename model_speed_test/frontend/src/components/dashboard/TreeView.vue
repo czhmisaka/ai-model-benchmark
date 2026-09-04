@@ -80,48 +80,6 @@ const unclassifiedCases = computed(() => {
   return props.testCases.filter(tc => !tc.folder_id)
 })
 
-// ===== 拖拽状态 =====
-const dragOverFolderId = ref<string | null>(null)
-const draggingCaseId = ref<string | null>(null)
-
-function onDragStart(event: DragEvent, caseId: string) {
-  draggingCaseId.value = caseId
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'move'
-    event.dataTransfer.setData('text/plain', caseId)
-  }
-}
-
-function onDragOver(_event: DragEvent, folderId: string) {
-  dragOverFolderId.value = folderId
-}
-
-function onDragLeave(_event: DragEvent) {
-  // handled by parent
-}
-
-function onDrop(event: DragEvent, targetFolderId: string) {
-  event.preventDefault()
-  const caseId = event.dataTransfer?.getData('text/plain')
-  if (caseId) {
-    emit('move-case', caseId, targetFolderId)
-  }
-  dragOverFolderId.value = null
-  draggingCaseId.value = null
-}
-
-function onDropRoot(event: DragEvent) {
-  event.preventDefault()
-  const caseId = event.dataTransfer?.getData('text/plain')
-  if (caseId) {
-    emit('move-case', caseId, null)
-  }
-  dragOverFolderId.value = null
-  draggingCaseId.value = null
-}
-
-const rootDragOver = ref(false)
-
 // ===== 右键菜单 =====
 const contextMenuRef = ref<InstanceType<typeof ContextMenu> | null>(null)
 
@@ -209,10 +167,6 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
     <!-- 根区域（拖拽目标） -->
     <div
       class="tree-root-area"
-      :class="{ 'drag-over': rootDragOver }"
-      @dragover.prevent="rootDragOver = true"
-      @dragleave="rootDragOver = false"
-      @drop="onDropRoot"
     >
       <!-- 遍历根文件夹 -->
       <TreeItem
@@ -225,14 +179,9 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
         :selected-ids="selectedIds"
         :search-query="searchQuery"
         :collapsed="false"
-        :drag-over-folder-id="dragOverFolderId"
         @toggle-folder="emit('toggle-folder', $event)"
         @toggle-case="emit('toggle-case', $event)"
         @context-menu="onContextMenu"
-        @drag-start="onDragStart"
-        @drag-over="onDragOver"
-        @drag-leave="onDragLeave"
-        @drop="onDrop"
       />
 
       <!-- 未分类用例（复用 TreeItem .case-item 样式以保持视觉一致） -->
@@ -254,8 +203,6 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
             selected: selectedIds.has(caseItem.id),
             matched: searchQuery && caseItem.name.toLowerCase().includes(searchQuery.toLowerCase())
           }"
-          draggable="true"
-          @dragstart="onDragStart($event, caseItem.id)"
           @click="emit('toggle-case', caseItem.id)"
           @contextmenu.prevent="onContextMenu($event, 'case', '__root__', caseItem.id)"
         >
@@ -334,13 +281,6 @@ const selectAllChar = computed(() => (allSelected.value ? '⊙' : '○'))
   overflow-y: auto;
   overflow-x: hidden;
   min-height: 40px;
-}
-
-.tree-root-area.drag-over {
-  outline: 2px dashed var(--primary);
-  outline-offset: -2px;
-  border-radius: 6px;
-  background: var(--primary-dim);
 }
 
 /* ---------- 分区标题（未分类） ---------- */

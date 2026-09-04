@@ -31,7 +31,6 @@ const props = defineProps<{
   selectedIds: Set<string>
   searchQuery: string
   collapsed: boolean                      // 父级面板折叠状态
-  dragOverFolderId: string | null         // 拖拽悬停的文件夹 ID
 }>()
 
 // ===== Emits =====
@@ -39,10 +38,6 @@ const emit = defineEmits<{
   'toggle-folder': [folderId: string]
   'toggle-case': [caseId: string]
   'context-menu': [event: MouseEvent, type: 'folder' | 'case' | 'empty', folderId: string, caseId?: string]
-  'drag-start': [event: DragEvent, caseId: string]
-  'drag-over': [event: DragEvent, folderId: string]
-  'drag-leave': [event: DragEvent]
-  'drop': [event: DragEvent, folderId: string]
 }>()
 
 // ===== 展开/折叠状态 =====
@@ -114,28 +109,6 @@ function isNameMatched(name: string): boolean {
   return name.toLowerCase().includes(props.searchQuery.trim().toLowerCase())
 }
 
-// ===== 拖拽 =====
-function onDragStartCase(event: DragEvent, caseItem: TestCaseWithFolder) {
-  emit('drag-start', event, caseItem.id)
-}
-
-const isDragOverSelf = computed(() => {
-  return props.dragOverFolderId === props.node.folder_id
-})
-
-function onDragOverFolder(event: DragEvent) {
-  event.preventDefault()
-  emit('drag-over', event, props.node.folder_id)
-}
-
-function onDragLeaveFolder(event: DragEvent) {
-  emit('drag-leave', event)
-}
-
-function onDropFolder(event: DragEvent) {
-  emit('drop', event, props.node.folder_id)
-}
-
 // ===== 右键菜单 =====
 function onContextMenu(event: MouseEvent, type: 'folder' | 'case' | 'empty', caseId?: string) {
   emit('context-menu', event, type, props.node.folder_id, caseId)
@@ -149,13 +122,9 @@ function onContextMenu(event: MouseEvent, type: 'folder' | 'case' | 'empty', cas
       class="tree-item folder-item"
       :class="{
         'has-children': node.children && node.children.length > 0,
-        'matched': node._matched,
-        'drag-over': isDragOverSelf
+        'matched': node._matched
       }"
       :style="{ paddingLeft: (depth * 16) + 'px' }"
-      @dragover="onDragOverFolder"
-      @dragleave="onDragLeaveFolder"
-      @drop="onDropFolder"
       @contextmenu.prevent="onContextMenu($event, 'folder')"
     >
       <!-- 展开/折叠箭头 -->
@@ -199,8 +168,6 @@ function onContextMenu(event: MouseEvent, type: 'folder' | 'case' | 'empty', cas
         class="tree-item case-item"
         :class="{ selected: isCaseChecked(caseItem.id), matched: isNameMatched(caseItem.name) }"
         :style="{ paddingLeft: ((depth + 1) * 16 + 8) + 'px' }"
-        draggable="true"
-        @dragstart="onDragStartCase($event, caseItem)"
         @click="emit('toggle-case', caseItem.id)"
         @contextmenu.prevent="onContextMenu($event, 'case', caseItem.id)"
       >
@@ -228,14 +195,9 @@ function onContextMenu(event: MouseEvent, type: 'folder' | 'case' | 'empty', cas
         :selected-ids="selectedIds"
         :search-query="searchQuery"
         :collapsed="collapsed"
-        :drag-over-folder-id="dragOverFolderId"
         @toggle-folder="emit('toggle-folder', $event)"
         @toggle-case="emit('toggle-case', $event)"
         @context-menu="(event, type, folderId, caseId) => emit('context-menu', event, type, folderId, caseId)"
-        @drag-start="(event, caseId) => emit('drag-start', event, caseId)"
-        @drag-over="(event, folderId) => emit('drag-over', event, folderId)"
-        @drag-leave="emit('drag-leave', $event)"
-        @drop="(event, folderId) => emit('drop', event, folderId)"
       />
 
       <!-- 空文件夹提示 -->
@@ -279,11 +241,6 @@ function onContextMenu(event: MouseEvent, type: 'folder' | 'case' | 'empty', cas
 
 .folder-item:hover {
   background: var(--gray-50);
-}
-
-.folder-item.drag-over {
-  background: var(--primary-dim);
-  border-left-color: var(--primary);
 }
 
 /* ========== Case Node — 卡片式，对齐 Models 列 ========== */
